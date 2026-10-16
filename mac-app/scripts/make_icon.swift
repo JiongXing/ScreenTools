@@ -1,4 +1,4 @@
-// 生成 PhoneShot 的 App 图标（1024×1024 PNG）。
+// 生成 ScreenTools 的 App 图标（1024×1024 PNG）。
 // 用法：swift scripts/make_icon.swift <输出.png>
 // 再由 scripts/make_icon.sh 转成 Resources/AppIcon.icns。
 import AppKit
@@ -103,6 +103,27 @@ ctx.setFillColor(color(0xFFFFFF, 0.9))
 ctx.addPath(CGPath(roundedRect: CGRect(x: center.x - 34, y: screen.maxY - 34, width: 68, height: 14),
                    cornerWidth: 7, cornerHeight: 7, transform: nil))
 ctx.fillPath()
+
+// 4. 右下角「压暗」徽章：深色圆底 + 白色月牙
+let badgeCenter = CGPoint(x: 722, y: 262)
+let badgeR = 128.0
+ctx.saveGState()
+ctx.setShadow(offset: CGSize(width: 0, height: -8), blur: 20, color: color(0x000000, 0.4))
+ctx.setFillColor(color(0x141C3A))
+ctx.fillEllipse(in: CGRect(x: badgeCenter.x - badgeR, y: badgeCenter.y - badgeR, width: badgeR * 2, height: badgeR * 2))
+ctx.restoreGState()
+ctx.setStrokeColor(white)
+ctx.setLineWidth(12)
+ctx.strokeEllipse(in: CGRect(x: badgeCenter.x - badgeR, y: badgeCenter.y - badgeR, width: badgeR * 2, height: badgeR * 2))
+let moonR = 72.0
+ctx.saveGState()
+ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+ctx.setFillColor(white)
+ctx.fillEllipse(in: CGRect(x: badgeCenter.x - moonR, y: badgeCenter.y - moonR, width: moonR * 2, height: moonR * 2))
+ctx.setBlendMode(.clear)
+ctx.fillEllipse(in: CGRect(x: badgeCenter.x - moonR + 38, y: badgeCenter.y - moonR + 30, width: moonR * 1.7, height: moonR * 1.7))
+ctx.endTransparencyLayer()
+ctx.restoreGState()
 
 guard let image = ctx.makeImage(),
       let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: out) as CFURL, "public.png" as CFString, 1, nil)

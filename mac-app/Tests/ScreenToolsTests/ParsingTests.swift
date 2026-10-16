@@ -1,6 +1,6 @@
 import Carbon
 import XCTest
-@testable import PhoneShot
+@testable import ScreenTools
 
 @MainActor
 final class ParsingTests: XCTestCase {

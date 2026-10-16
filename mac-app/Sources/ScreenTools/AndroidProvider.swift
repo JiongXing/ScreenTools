@@ -95,7 +95,7 @@ final class AndroidProvider: DeviceProvider {
         let fm = FileManager.default
         let env = ProcessInfo.processInfo.environment
         var candidates: [String] = []
-        if let path = env["PHONESHOT_ADB"] { candidates.append(path) }
+        if let path = env["SCREENTOOLS_ADB"] { candidates.append(path) }
         for key in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
             if let sdk = env[key] { candidates.append("\(sdk)/platform-tools/adb") }
         }

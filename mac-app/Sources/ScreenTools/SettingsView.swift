@@ -67,7 +67,7 @@ struct SettingsView: View {
             section("快捷键") {
                 row("截图（JPEG）") { HotKeyRecorder(spec: $jpegKey) }
                 row("截图（PNG）") { HotKeyRecorder(spec: $pngKey) }
-                Text("默认不设置快捷键。快捷键仅在 PhoneShot 处于前台时有效：点击按钮后按下组合键（需含 ⌘、⌃ 或 ⌥）。⌘W 关闭窗口（不退出），⌘Q 退出。")
+                Text("默认不设置快捷键。截图快捷键仅在本 App 处于前台时有效：点击按钮后按下组合键（需含 ⌘、⌃ 或 ⌥）。⌘W 关闭窗口（不退出），⌘Q 退出。")
                     .font(.ui(11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -91,7 +91,7 @@ struct SettingsView: View {
             }
             section("通用") {
                 Toggle("开机自动启动", isOn: $launchAtLogin).toggleStyle(UICheckToggleStyle())
-                Toggle("允许外部工具通过 phoneshot:// 触发截图", isOn: $allowURL).toggleStyle(UICheckToggleStyle())
+                Toggle("允许外部工具通过 screentools:// 触发截图 / 压暗", isOn: $allowURL).toggleStyle(UICheckToggleStyle())
             }
         }
         .font(.ui(13))

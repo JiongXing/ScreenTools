@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PhoneShot 的 iOS 辅助进程。
+"""ScreenTools 的 iOS 辅助进程。
 
 由菜单栏 App 启动并常驻，通过 stdin/stdout 按行收发 JSON：
     → {"id": 1, "cmd": "list", "refresh": true}
@@ -27,13 +27,13 @@ from typing import Any, Optional
 _PROTOCOL_OUT = os.fdopen(os.dup(sys.stdout.fileno()), "w", buffering=1, encoding="utf-8")
 sys.stdout = sys.stderr
 
-LOG_DIR = Path.home() / "Library" / "Logs" / "PhoneShot"
+LOG_DIR = Path.home() / "Library" / "Logs" / "ScreenTools"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 _handler = RotatingFileHandler(LOG_DIR / "ios-helper.log", maxBytes=2_000_000, backupCount=2, encoding="utf-8")
 _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 logging.basicConfig(level=logging.INFO, handlers=[_handler])
 logging.getLogger("urllib3").setLevel(logging.WARNING)
-logger = logging.getLogger("phoneshot.ios")
+logger = logging.getLogger("screentools.ios")
 
 from pymobiledevice3 import usbmux  # noqa: E402
 from pymobiledevice3.exceptions import (  # noqa: E402

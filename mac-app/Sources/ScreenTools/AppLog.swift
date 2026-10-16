@@ -1,11 +1,11 @@
 import Foundation
 
-/// 简单的文件日志：~/Library/Logs/PhoneShot/app.log（iOS 辅助进程另写 ios-helper.log）
+/// 简单的文件日志：~/Library/Logs/ScreenTools/app.log（iOS 辅助进程另写 ios-helper.log）
 enum AppLog {
     static let directory = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Logs/PhoneShot")
+        .appendingPathComponent("Library/Logs/ScreenTools")
     private static let file = directory.appendingPathComponent("app.log")
-    private static let queue = DispatchQueue(label: "phoneshot.log")
+    private static let queue = DispatchQueue(label: "screentools.log")
     private static let formatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")

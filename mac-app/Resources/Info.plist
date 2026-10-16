@@ -2,23 +2,23 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>com.phoneshot.app</string>
-  <key>CFBundleName</key><string>PhoneShot</string>
-  <key>CFBundleDisplayName</key><string>PhoneShot</string>
-  <key>CFBundleExecutable</key><string>PhoneShot</string>
+  <key>CFBundleIdentifier</key><string>com.screentools.app</string>
+  <key>CFBundleName</key><string>ScreenTools</string>
+  <key>CFBundleDisplayName</key><string>屏幕工具箱</string>
+  <key>CFBundleExecutable</key><string>ScreenTools</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>2.0.0</string>
-  <key>CFBundleVersion</key><string>2</string>
+  <key>CFBundleShortVersionString</key><string>3.0.0</string>
+  <key>CFBundleVersion</key><string>3</string>
   <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSHumanReadableCopyright</key><string>手机截图工具：iPhone / Android 一键截图到 Mac</string>
+  <key>NSHumanReadableCopyright</key><string>屏幕工具箱：手机截图（iPhone / Android）+ 屏幕压暗</string>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
-      <key>CFBundleURLName</key><string>com.phoneshot.app</string>
-      <key>CFBundleURLSchemes</key><array><string>phoneshot</string></array>
+      <key>CFBundleURLName</key><string>com.screentools.app</string>
+      <key>CFBundleURLSchemes</key><array><string>screentools</string></array>
     </dict>
   </array>
   <key>NSLocalNetworkUsageDescription</key><string>用于通过 Wi‑Fi 连接手机并截图。</string>

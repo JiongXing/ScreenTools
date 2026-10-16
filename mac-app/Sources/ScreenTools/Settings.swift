@@ -3,7 +3,7 @@ import Carbon
 import Foundation
 
 extension Notification.Name {
-    static let showSettings = Notification.Name("PhoneShotShowSettings")
+    static let showSettings = Notification.Name("ScreenToolsShowSettings")
 }
 
 /// 一个全局快捷键：Carbon 键码 + Carbon 修饰键 + 用于显示的按键名。

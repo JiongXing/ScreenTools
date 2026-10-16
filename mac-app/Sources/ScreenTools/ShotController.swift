@@ -26,7 +26,7 @@ final class ShotController: ObservableObject {
         Task {
             defer { setBusy(false) }
             let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("phoneshot-\(UUID().uuidString).png")
+                .appendingPathComponent("screentools-\(UUID().uuidString).png")
             defer { try? FileManager.default.removeItem(at: tmp) }
 
             do {

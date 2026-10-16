@@ -4,8 +4,12 @@ import SwiftUI
 /// 主窗口：左侧设备列表，右侧最近截图预览、截图/复制/定位按钮和历史。
 /// 所有尺寸都经过 S()/.ui() 逐个放大。
 struct MainView: View {
+    enum Tool { case capture, dim }
+
     @ObservedObject var manager: DeviceManager
     @ObservedObject var shots: ShotController
+    @ObservedObject var dimmer: ScreenDimmer
+    @State private var tool = Tool.capture
     @State private var selected: URL?
     @State private var openAfter = ShotController.openAfterCapture
 
@@ -13,13 +17,20 @@ struct MainView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                sidebar
-                Divider()
-                detail
-            }
+            toolPicker
             Divider()
-            statusBar
+            switch tool {
+            case .capture:
+                HStack(spacing: 0) {
+                    sidebar
+                    Divider()
+                    detail
+                }
+                Divider()
+                statusBar
+            case .dim:
+                DimmerView(dimmer: dimmer)
+            }
         }
         .onChange(of: shots.history) { _ in selected = nil }
     }
@@ -28,6 +39,22 @@ struct MainView: View {
         let parts = [Settings.jpegHotKey.map { "\($0.display)（JPEG）" }, Settings.pngHotKey.map { "\($0.display)（PNG）" }]
             .compactMap { $0 }
         return parts.isEmpty ? "可在设置里添加截图快捷键" : "在任何位置按 " + parts.joined(separator: " 或 ")
+    }
+
+    private var toolPicker: some View {
+        HStack(spacing: S(8)) {
+            toolButton("手机截图", systemImage: "camera", tool: .capture)
+            toolButton("屏幕压暗", systemImage: "moon", tool: .dim)
+            Spacer()
+            if dimmer.isDimmed { Label("已压暗", systemImage: "moon.fill").font(.ui(12)).foregroundStyle(.secondary) }
+        }
+        .padding(.horizontal, S(14))
+        .padding(.vertical, S(8))
+    }
+
+    private func toolButton(_ title: String, systemImage: String, tool target: Tool) -> some View {
+        Button { tool = target } label: { Label(title, systemImage: systemImage) }
+            .buttonStyle(UIButtonStyle(prominent: tool == target))
     }
 
     // MARK: - 设备

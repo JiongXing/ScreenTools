@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "PhoneShot",
+    name: "ScreenTools",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "PhoneShot",
-            path: "Sources/PhoneShot",
+            name: "ScreenTools",
+            path: "Sources/ScreenTools",
             linkerSettings: [.linkedFramework("Carbon")]
         ),
-        .testTarget(name: "PhoneShotTests", dependencies: ["PhoneShot"], path: "Tests/PhoneShotTests"),
+        .testTarget(name: "ScreenToolsTests", dependencies: ["ScreenTools"], path: "Tests/ScreenToolsTests"),
     ]
 )

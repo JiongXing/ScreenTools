@@ -16,14 +16,14 @@ final class HelperClient {
 
     /// 打包后的 App 用 Contents/Resources 下的内置 Python；开发时可用环境变量覆盖。
     private var pythonURL: URL {
-        if let path = ProcessInfo.processInfo.environment["PHONESHOT_PYTHON"] {
+        if let path = ProcessInfo.processInfo.environment["SCREENTOOLS_PYTHON"] {
             return URL(fileURLWithPath: path)
         }
         return Bundle.main.resourceURL!.appendingPathComponent("python/bin/python3")
     }
 
     private var scriptURL: URL {
-        if let path = ProcessInfo.processInfo.environment["PHONESHOT_HELPER"] {
+        if let path = ProcessInfo.processInfo.environment["SCREENTOOLS_HELPER"] {
             return URL(fileURLWithPath: path)
         }
         return Bundle.main.resourceURL!.appendingPathComponent("helper/ios_helper.py")

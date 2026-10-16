@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#  构建 PhoneShot.app 和 PhoneShot.dmg
+#  构建 ScreenTools.app 和 ScreenTools.dmg
 #  用法：  mac-app/scripts/build.sh
 #  adb：   自动从 ANDROID_HOME 或 ~/Library/Android/sdk 取 adb 内置到 App（ADB=/path/to/adb 指定，SKIP_ADB=1 不内置）
 #  签名：  默认 ad-hoc（SIGN_ID=-）。有 Developer ID 证书时：
@@ -10,8 +10,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
-APP="$BUILD/PhoneShot.app"
-DMG="$BUILD/PhoneShot.dmg"
+APP="$BUILD/ScreenTools.app"
+DMG="$BUILD/ScreenTools.dmg"
 PY_VERSION="${PY_VERSION:-3.12}"
 SIGN_ID="${SIGN_ID:--}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
@@ -75,8 +75,8 @@ fi
 
 step "5/7 编译 Swift"
 (cd "$ROOT" && swift build -c release --arch arm64)
-BIN="$(cd "$ROOT" && swift build -c release --arch arm64 --show-bin-path)/PhoneShot"
-cp "$BIN" "$APP/Contents/MacOS/PhoneShot"
+BIN="$(cd "$ROOT" && swift build -c release --arch arm64 --show-bin-path)/ScreenTools"
+cp "$BIN" "$APP/Contents/MacOS/ScreenTools"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
@@ -91,7 +91,7 @@ find "$APP/Contents/Resources" "$APP/Contents/Helpers" -type f -print0 | while I
   case "$KIND" in
     *Mach-O*executable*)
       if [ "$SIGN_ID" != "-" ]; then
-        codesign "${SIGN_ARGS[@]}" --entitlements "$ROOT/Resources/PhoneShot.entitlements" "$f" 2>/dev/null
+        codesign "${SIGN_ARGS[@]}" --entitlements "$ROOT/Resources/ScreenTools.entitlements" "$f" 2>/dev/null
       else
         codesign "${SIGN_ARGS[@]}" "$f" 2>/dev/null
       fi ;;
@@ -100,7 +100,7 @@ find "$APP/Contents/Resources" "$APP/Contents/Helpers" -type f -print0 | while I
 done
 APP_SIGN_ARGS=("${SIGN_ARGS[@]}")
 if [ "$SIGN_ID" != "-" ]; then
-  APP_SIGN_ARGS+=(--entitlements "$ROOT/Resources/PhoneShot.entitlements")
+  APP_SIGN_ARGS+=(--entitlements "$ROOT/Resources/ScreenTools.entitlements")
 fi
 codesign "${APP_SIGN_ARGS[@]}" "$APP" 2>/dev/null
 codesign --verify --deep --strict "$APP"
@@ -109,7 +109,7 @@ step "7/7 打包 DMG"
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -quiet -volname "PhoneShot" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+hdiutil create -quiet -volname "ScreenTools" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 rm -rf "$STAGE"
 if [ "$SIGN_ID" != "-" ]; then
   codesign --force --sign "$SIGN_ID" --timestamp "$DMG"

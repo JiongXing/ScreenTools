@@ -2,18 +2,20 @@ import AppKit
 import SwiftUI
 
 /// Dock 应用：没有菜单栏图标。关闭窗口不会退出进程，点 Dock 图标可重新打开窗口。
-/// 快捷键只在本 App 处于前台时有效（本地事件监听，不需要任何系统权限）。
+/// 截图快捷键只在本 App 处于前台时有效（本地事件监听，不需要任何系统权限）；
+/// 屏幕压暗的 ⌃⌥⌘B / ⌃⌥⌘R 是全局快捷键。
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let manager = DeviceManager()
     private lazy var shots = ShotController(manager: manager)
+    private let dimmer = ScreenDimmer()
 
     private var mainWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var keyMonitor: Any?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        // phoneshot://capture?format=png —— 供快捷指令、Raycast 等外部工具触发截图
+        // screentools://capture?format=png、screentools://dim 等 —— 供快捷指令、Raycast 等外部工具触发
         NSAppleEventManager.shared().setEventHandler(
             self, andSelector: #selector(handleURL(_:reply:)),
             forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL)
@@ -21,6 +23,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        dimmer.start()
+        if CommandLine.arguments.contains("--self-check") {
+            let passed = dimmer.selfCheck()
+            dimmer.stop()
+            exit(passed ? 0 : 1)
+        }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             MainActor.assumeIsolated { self?.handleKey(event) ?? event }
         }
@@ -32,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        dimmer.stop()
         manager.ios.stop()
     }
 
@@ -73,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showSettings() {
         if settingsWindow == nil {
             let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
-            window.title = "PhoneShot 设置"
+            window.title = "屏幕工具箱 设置"
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false
             window.center()
@@ -88,10 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showMainWindow() {
         if mainWindow == nil {
-            let host = NSHostingController(rootView: MainView(manager: manager, shots: shots))
+            let host = NSHostingController(rootView: MainView(manager: manager, shots: shots, dimmer: dimmer))
             host.sizingOptions = []
             let window = NSWindow(contentViewController: host)
-            window.title = "PhoneShot"
+            window.title = "屏幕工具箱"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.setContentSize(NSSize(width: 720 * UIScale.factor, height: 480 * UIScale.factor))
             window.contentMinSize = NSSize(width: 640 * UIScale.factor, height: 440 * UIScale.factor)
@@ -110,9 +119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard Settings.allowURLScheme,
               let text = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URLComponents(string: text) else { return }
-        if url.host == "show" {
-            showMainWindow()
-            return
+        switch url.host {
+        case "show": showMainWindow(); return
+        case "dim": dimmer.toggle(); return
+        case "restore": dimmer.restore(); return
+        default: break
         }
         guard url.host == "capture" else { return }
         let format = url.queryItems?.first { $0.name == "format" }?.value
