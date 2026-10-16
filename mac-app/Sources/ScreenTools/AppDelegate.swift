@@ -8,6 +8,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let manager = DeviceManager()
     private lazy var shots = ShotController(manager: manager)
+    private lazy var photos = PhotoTransfer(manager: manager)
     private let dimmer = ScreenDimmer()
 
     private var mainWindow: NSWindow?
@@ -97,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showMainWindow() {
         if mainWindow == nil {
-            let host = NSHostingController(rootView: MainView(manager: manager, shots: shots, dimmer: dimmer))
+            let host = NSHostingController(rootView: MainView(manager: manager, shots: shots, transfer: photos, dimmer: dimmer))
             host.sizingOptions = []
             let window = NSWindow(contentViewController: host)
             window.title = "屏幕工具箱"

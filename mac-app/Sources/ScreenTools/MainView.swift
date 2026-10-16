@@ -1,13 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// 主窗口：左侧设备列表，右侧最近截图预览、截图/复制/定位按钮和历史。
+/// 主窗口：左侧设备列表，右侧按顶部标签显示截图、手机相册或屏幕压暗。
 /// 所有尺寸都经过 S()/.ui() 逐个放大。
 struct MainView: View {
-    enum Tool { case capture, dim }
+    enum Tool { case capture, photos, dim }
 
     @ObservedObject var manager: DeviceManager
     @ObservedObject var shots: ShotController
+    @ObservedObject var transfer: PhotoTransfer
     @ObservedObject var dimmer: ScreenDimmer
     @State private var tool = Tool.capture
     @State private var selected: URL?
@@ -28,6 +29,12 @@ struct MainView: View {
                 }
                 Divider()
                 statusBar
+            case .photos:
+                HStack(spacing: 0) {
+                    sidebar
+                    Divider()
+                    PhotosView(manager: manager, transfer: transfer)
+                }
             case .dim:
                 DimmerView(dimmer: dimmer)
             }
@@ -44,6 +51,7 @@ struct MainView: View {
     private var toolPicker: some View {
         HStack(spacing: S(8)) {
             toolButton("手机截图", systemImage: "camera", tool: .capture)
+            toolButton("手机相册", systemImage: "photo.on.rectangle", tool: .photos)
             toolButton("屏幕压暗", systemImage: "moon", tool: .dim)
             Spacer()
             if dimmer.isDimmed { Label("已压暗", systemImage: "moon.fill").font(.ui(12)).foregroundStyle(.secondary) }

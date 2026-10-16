@@ -1,8 +1,9 @@
 # 屏幕工具箱（ScreenTools）
 
-一个 macOS 小工具箱，目前有两个功能（顶部切换）：
+一个 macOS 小工具箱，目前有三个功能（顶部切换）：
 
 - **手机截图**：把连在这台 Mac 上的手机当前画面截下来，支持 **iPhone / iPad 和 Android**。截好的图会保存到「下载」文件夹（可改）、复制到剪贴板；可选用「预览」打开。
+- **手机相册**：把手机相册里的图片**导出到这台 Mac**，也可以把 Mac 上的图片**传进手机相册**。Android 直接读写，iPhone 导出走数据线、导入走隔空投送（见下文）。
 - **屏幕压暗**：用可穿透鼠标的黑色遮罩临时压暗所有活动屏幕，不修改硬件背光（由原 ScreenDimmer 合并而来）。
 
 它是一个普通的 Dock 应用，**没有菜单栏图标**，所有功能都在主窗口里：
@@ -66,6 +67,17 @@
 - **最近**：最近 8 张 屏幕工具箱 截的图，点缩略图可在左侧预览。历史记在 App 的偏好设置里，重开 App 仍在，已被删除的文件会自动忽略。它记录的是 屏幕工具箱 自己截过的图，不会扫描「下载」文件夹。
 - **底部状态栏**：显示保存位置；「截图后用预览打开」默认**不勾选**；右下角齿轮打开设置。
 
+### 手机相册
+
+在主窗口顶部切到「手机相册」，左侧选好设备（和截图共用同一份设备列表）：
+
+- **导出到电脑**：列表里是手机相册最新的 500 张图片（新的在前，可用 ⇧/⌘ 点击多选，也可点「全选」），点「导出所选」。文件保存在「保存位置」下的 `手机相册` 文件夹（默认 `下载/手机相册`），文件名与手机上一致、重名自动加 `_2`，修改时间与手机上的一致。导出完成后可点「在 Finder 中显示」，导出中可以「取消」。
+- **传进手机**：点「导入图片到手机…」选择图片或文件夹，也可以直接把图片/文件夹**拖进窗口**（支持 JPG、PNG、HEIC、GIF、WebP 等）。
+  - **Android**：图片会传到手机的 `Pictures/ScreenTools` 文件夹，相册里出现名为「ScreenTools」的相簿，可能要等几秒。文件名里的空格、引号等会换成下划线，重名自动加 `_2`。
+  - **iPhone / iPad**：苹果不允许 Mac 通过数据线直接写入「照片」，所以这里会打开**隔空投送**：在弹出的窗口里选这台手机，并在手机上点「接受」，图片就会存进「照片」。需要 Mac 的蓝牙和 Wi‑Fi 打开；手机和 Mac 登录同一个 Apple 账号时一般会自动接收。
+- iPhone 导出读取的是「相机胶卷」里**已经存在手机本地**的图片（含截图）；「优化 iPhone 储存空间」后只在 iCloud 里的原图、共享相簿里的图片读不到。读取相册不需要开发者模式，但需要信任过这台电脑，手机要解锁。
+- 手机相册页的设备列表里，iPhone 下方若有「未开启开发者模式」的橙色提示，只影响截图，不影响相册。
+
 ### 设置（⌘,）
 - **快捷键**：默认都未设置。点按钮后按下组合键（需含 ⌘、⌃ 或 ⌥），Esc 取消，点 ✕ 清除。只在 屏幕工具箱 处于前台时有效。
 - **保存位置**：默认「下载」，可改成任意文件夹。
@@ -106,6 +118,8 @@
 | Android 显示「未授权」 | 解锁手机，在「允许 USB 调试吗？」弹窗中点「允许」；没有弹窗就重新插拔数据线 |
 | Android 显示「设备离线」 | 重新插拔数据线，或者在开发者选项里把 USB 调试关掉再打开 |
 | 截图是全黑的 | 当前页面禁止截屏，或者手机已经息屏 |
+| 手机相册里看不到某些 iPhone 图片 | 只显示存在手机本地的相机胶卷图片；iCloud 里未下载的原图、共享相簿的图读不到，先在手机上下载 |
+| 传到 Android 的图片相册里没出现 | 等几秒或下拉刷新相册；也可在文件管理器里查看 `Pictures/ScreenTools` |
 | 「某某设备」未连接 | 你固定选择的那台手机不在线：重新连接，或在主窗口左侧改回「自动选择」 |
 
 日志文件在 `~/Library/Logs/ScreenTools/` 下：`app.log` 是 App 的日志，`ios-helper.log` 是 iPhone 连接相关的日志。反馈问题时请附上这两个文件。
@@ -139,12 +153,14 @@ mac-app/
     Settings.swift              偏好设置（UserDefaults）与 HotKeySpec
     Device.swift                设备模型 + DeviceProvider 协议
     DeviceManager.swift         汇总各平台设备、记住所选设备、自动选择规则
-    IOSProvider.swift           iOS：通过 Python 辅助进程
-    AndroidProvider.swift       Android：调用 adb
+    IOSProvider.swift           iOS：通过 Python 辅助进程（截图、相册列表与导出）
+    AndroidProvider.swift       Android：调用 adb（截图、相册列表、导出、导入）
     HelperClient.swift          管理 Python 辅助进程（JSON-lines 通信，超时会重启它）
     ProcessRunner.swift         异步运行命令行程序（带超时）
     ScreenDimmer.swift          屏幕压暗：遮罩窗口、Carbon 全局热键 ⌃⌥⌘B/R、屏幕变化/睡眠唤醒处理、--self-check
     DimmerView.swift            「屏幕压暗」页（压暗/恢复、压暗程度、快捷键说明）
+    PhotosView.swift            「手机相册」页（图片列表、导出、导入/拖入）
+    PhotoTransfer.swift         相册传输流程（列表、导出、导入、进度/取消）与文件名处理 PhotoNaming
     ShotController.swift        截图流程：选设备 → 截图 → 保存 → 剪贴板 → 历史（编码在后台线程）
     ImageOutput.swift           JPEG/PNG 编码、文件命名、剪贴板、黑屏检测
     Notifier.swift / AppLog.swift  通知与日志
@@ -168,6 +184,11 @@ mac-app/
 3. `adb -s <序列号> exec-out screencap -p` 截取 PNG。
 4. adb 的查找顺序：环境变量 `SCREENTOOLS_ADB` → `ANDROID_HOME` → `~/Library/Android/sdk/platform-tools` → Homebrew → App 内置的 `Contents/Helpers/adb`。之所以优先用电脑上已有的 adb，是为了避免两个不同版本的 adb 后台服务互相踢掉对方。
 
+**相册**：
+- Android：`adb shell find /sdcard/DCIM /sdcard/Pictures -type f -exec stat -c '%Y %s %n' {} +` 列出图片（忽略隐藏文件和缩略图缓存），`adb pull` 导出；导入用 `adb push` 到 `/sdcard/Pictures/ScreenTools/`，再发 `MEDIA_SCANNER_SCAN_FILE` 广播通知相册刷新。
+- iOS：辅助进程用 pymobiledevice3 的 `AfcService`（lockdown 的 `com.apple.afc`，只能访问 `/DCIM`）列出并拷贝图片，不需要开发者模式和隧道。写入「照片」库没有公开的有线接口，所以导入走隔空投送（`NSSharingService(named: .sendViaAirDrop)`）。
+- `afc` 模块导入时依赖 `xonsh`，所以 `build.sh` 不能把它从内置 Python 里删掉（构建时会验证 `import pymobiledevice3.services.afc`）。
+
 **iOS 辅助进程协议**（每行一个 JSON）：
 
 ```
@@ -176,6 +197,10 @@ mac-app/
 → {"id":2,"cmd":"screenshot","udid":"…","out":"/tmp/x.png"}
 ← {"id":2,"ok":true,"device":{…},"ms":420}
 ← {"id":2,"ok":false,"code":"DEV_MODE_OFF","message":"…"}
+→ {"id":3,"cmd":"photos_list","udid":"…","limit":500}
+← {"id":3,"ok":true,"photos":[{"path":"/DCIM/100APPLE/IMG_0001.HEIC","size":123,"mtime":1.7e9}],"total":1234}
+→ {"id":4,"cmd":"photos_pull","udid":"…","items":[{"path":"/DCIM/100APPLE/IMG_0001.HEIC","out":"/Users/x/a.heic"}]}
+← {"id":4,"ok":true,"results":[{"path":"…","ok":true}]}
 ```
 
 ### 构建
@@ -213,6 +238,6 @@ cd mac-app && swift test
 # 单独运行 iOS 辅助进程，然后输入 {"id":1,"cmd":"list","refresh":true}
 mac-app/build/ScreenTools.app/Contents/Resources/python/bin/python3 -I -B mac-app/helper/ios_helper.py
 
-# 让 App 使用指定的 adb（例如测试用的假 adb）
+# 让 App 使用指定的 adb（例如测试用的假 adb；单元测试里的相册流程就是用假 adb 脚本跑的）
 open --env SCREENTOOLS_ADB=/path/to/adb mac-app/build/ScreenTools.app
 ```

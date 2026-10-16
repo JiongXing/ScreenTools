@@ -38,8 +38,9 @@ rm -f "$PY_LIB/EXTERNALLY-MANAGED"
 step "3/7 安装 pymobiledevice3（iOS）"
 uv pip install --quiet --python "$PY/bin/python3" -r "$ROOT/requirements.txt"
 SITE="$PY_LIB/site-packages"
-# 只有交互式 CLI（ipython shell、afc shell、tunneld HTTP 服务）才用到的包，截图链路不会导入
-for pkg in IPython jedi parso xonsh pip fastapi uvicorn starlette; do
+# 只有交互式 CLI（ipython shell、tunneld HTTP 服务）才用到的包，截图和相册链路不会导入。
+# 注意 xonsh 不能删：pymobiledevice3 的 AFC 模块（相册导出）在导入时就要用它。
+for pkg in IPython jedi parso pip fastapi uvicorn starlette; do
   rm -rf "$SITE/$pkg" "$SITE/$pkg"-*.dist-info
 done
 # bin/ 里只留 python3*，其余都是已删除包的入口脚本（ipython、xonsh、uvicorn…）
@@ -50,7 +51,7 @@ find "$PY" -type d -name __pycache__ -prune -exec rm -rf {} +
 cp "$ROOT/helper/ios_helper.py" "$APP/Contents/Resources/helper/"
 "$PY/bin/python3" -I -m compileall -q -j 0 "$PY_LIB" "$APP/Contents/Resources/helper" >/dev/null || true
 # 验证依赖能正常导入
-"$PY/bin/python3" -I -c "import pymobiledevice3.remote.userspace_tunnel, pymobiledevice3.services.dvt.instruments.screenshot"
+"$PY/bin/python3" -I -c "import pymobiledevice3.remote.userspace_tunnel, pymobiledevice3.services.dvt.instruments.screenshot, pymobiledevice3.services.afc"
 
 step "4/7 内置 adb（Android）"
 ADB="${ADB:-}"

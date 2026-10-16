@@ -124,7 +124,7 @@ final class HelperClient {
     /// 请求超时：辅助进程仍在处理它（并占着内部锁），后续请求都会排在后面，所以直接重启辅助进程。
     private func handleTimeout(_ id: Int) {
         guard pending[id] != nil else { return }
-        resolve(id, Self.failure("TIMEOUT", "截图超时，请确认手机已解锁并保持连接"))
+        resolve(id, Self.failure("TIMEOUT", "操作超时，请确认手机已解锁并保持连接"))
         AppLog.write("request \(id) timed out, restarting helper")
         process?.terminate() // terminationHandler → handleExit 会自动重启
     }

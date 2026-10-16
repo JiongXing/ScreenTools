@@ -66,6 +66,102 @@ final class AndroidProvider: DeviceProvider {
         try output.stdout.write(to: url)
     }
 
+    // MARK: - 相册
+
+    /// 手机里放图片的位置：相机、截图、其它 App 保存的图片
+    private static let photoRoots = ["/sdcard/DCIM", "/sdcard/Pictures"]
+    /// 从电脑导入的图片放在这个文件夹，相册里会出现同名相簿
+    static let importFolder = "/sdcard/Pictures/ScreenTools"
+
+    func listPhotos(_ device: Device, limit: Int) async throws -> PhotoListing {
+        guard let adb else { throw ShotFailure("没有找到 adb，无法连接 Android 手机") }
+        await ensureServer(adb)
+        // 目录不存在时 find 会报错但仍会处理其它目录，所以不看退出码
+        let script = "find \(Self.photoRoots.joined(separator: " ")) -type f -exec stat -c '%Y %s %n' {} + 2>/dev/null"
+        let output = try await ProcessRunner.run(adb, ["-s", device.serial, "shell", script], timeout: 90)
+        if output.timedOut { throw ShotFailure("读取相册超时：请确认手机已解锁并保持连接") }
+        if output.status != 0, output.stdout.isEmpty {
+            let message = output.stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let known = Self.problem(forError: message) { throw ShotFailure(known) }
+        }
+        let all = Self.parsePhotoList(output.stdoutText)
+        return PhotoListing(items: Array(all.prefix(limit)), total: all.count)
+    }
+
+    func exportPhotos(
+        _ device: Device,
+        jobs: [(item: PhotoItem, destination: URL)],
+        onProgress: @MainActor (Int) -> Void
+    ) async throws -> [String: String] {
+        guard let adb else { throw ShotFailure("没有找到 adb，无法连接 Android 手机") }
+        await ensureServer(adb)
+        var failures: [String: String] = [:]
+        for (index, job) in jobs.enumerated() {
+            try Task.checkCancellation()
+            let output = try await ProcessRunner.run(
+                adb, ["-s", device.serial, "pull", job.item.id, job.destination.path], timeout: 300
+            )
+            if output.status == 0, !output.timedOut {
+                PhotoNaming.stampDate(job.item.date, on: job.destination)
+            } else {
+                let message = (output.stderrText + output.stdoutText).trimmingCharacters(in: .whitespacesAndNewlines)
+                if let known = Self.problem(forError: message) { throw ShotFailure(known) }
+                failures[job.item.id] = output.timedOut ? "超时" : String(message.prefix(120))
+                try? FileManager.default.removeItem(at: job.destination)
+            }
+            onProgress(index + 1)
+        }
+        return failures
+    }
+
+    /// 把电脑上的图片推到手机的 Pictures/ScreenTools，并通知系统相册刷新。返回单个文件失败的原因（键为文件名）。
+    func importPhotos(
+        _ device: Device,
+        files: [URL],
+        onProgress: @MainActor (Int) -> Void
+    ) async throws -> [String: String] {
+        guard let adb else { throw ShotFailure("没有找到 adb，无法连接 Android 手机") }
+        await ensureServer(adb)
+        let serial = ["-s", device.serial]
+        let folder = Self.importFolder
+
+        let prepare = try await ProcessRunner.run(
+            adb, serial + ["shell", "mkdir -p \(Self.shellQuote(folder)) && ls -1 \(Self.shellQuote(folder))"], timeout: 20
+        )
+        guard prepare.status == 0 else {
+            let message = (prepare.stderrText + prepare.stdoutText).trimmingCharacters(in: .whitespacesAndNewlines)
+            throw ShotFailure(Self.problem(forError: message) ?? "无法写入手机存储：\(message.prefix(120))")
+        }
+        var taken = Set(prepare.stdoutText.split(separator: "\n").map { $0.lowercased() })
+
+        var failures: [String: String] = [:]
+        var pushed: [String] = []
+        for (index, file) in files.enumerated() {
+            try Task.checkCancellation()
+            let remoteName = PhotoNaming.unique(PhotoNaming.safeName(file.lastPathComponent)) { taken.contains($0.lowercased()) }
+            let output = try await ProcessRunner.run(adb, serial + ["push", file.path, "\(folder)/\(remoteName)"], timeout: 300)
+            if output.status == 0, !output.timedOut {
+                taken.insert(remoteName.lowercased())
+                pushed.append(remoteName)
+            } else {
+                let message = (output.stderrText + output.stdoutText).trimmingCharacters(in: .whitespacesAndNewlines)
+                if let known = Self.problem(forError: message) { throw ShotFailure(known) }
+                failures[file.lastPathComponent] = output.timedOut ? "超时" : String(message.prefix(120))
+            }
+            onProgress(index + 1)
+        }
+
+        // 让相册马上看到新图片（较新的 Android 会自行发现，失败也无妨）
+        if !pushed.isEmpty {
+            let scan = pushed.map { name in
+                let uri = "file://" + folder + "/" + (name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name)
+                return "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d \(Self.shellQuote(uri)) >/dev/null 2>&1"
+            }.joined(separator: "; ")
+            _ = try? await ProcessRunner.run(adb, serial + ["shell", scan], timeout: 30)
+        }
+        return failures
+    }
+
     // MARK: - adb
 
     private func ensureServer(_ adb: URL) async {
@@ -130,6 +226,24 @@ final class AndroidProvider: DeviceProvider {
             let model = parts.first { $0.hasPrefix("model:") }.map { String($0.dropFirst("model:".count)) }
             return Entry(serial: parts[0], state: state, model: model)
         }
+    }
+
+    /// 解析 `stat -c '%Y %s %n'` 的输出（修改时间 大小 路径），只保留图片，忽略隐藏文件和缩略图缓存，新的在前。
+    static func parsePhotoList(_ text: String) -> [PhotoItem] {
+        text.components(separatedBy: "\n").compactMap { raw -> PhotoItem? in
+            let parts = raw.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ", maxSplits: 2).map(String.init)
+            guard parts.count == 3, let mtime = TimeInterval(parts[0]), let size = Int64(parts[1]),
+                  parts[2].hasPrefix("/"), PhotoNaming.isImage(parts[2]),
+                  !parts[2].split(separator: "/").contains(where: { $0.hasPrefix(".") })
+            else { return nil }
+            return PhotoItem(id: parts[2], size: size, date: Date(timeIntervalSince1970: mtime))
+        }
+        .sorted { $0.date > $1.date }
+    }
+
+    /// 给 `adb shell` 用：单引号包起来，里面的单引号转义
+    static func shellQuote(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     static func isWireless(_ serial: String) -> Bool {

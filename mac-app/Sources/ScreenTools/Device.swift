@@ -50,10 +50,35 @@ struct ShotFailure: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// 手机相册里的一张图片
+struct PhotoItem: Identifiable, Hashable {
+    /// 手机上的完整路径（iOS 为 /DCIM/…，Android 为 /sdcard/…），同时作为唯一标识
+    let id: String
+    let size: Int64
+    let date: Date
+
+    var name: String { (id as NSString).lastPathComponent }
+}
+
+/// 相册列表：items 是最新的若干张，total 是手机上图片的总数
+struct PhotoListing {
+    var items: [PhotoItem]
+    var total: Int
+}
+
 @MainActor
 protocol DeviceProvider: AnyObject {
     /// refresh 为 true 时（打开菜单）重新读取设备状态；false 时（截图前）尽量走缓存、求快
     func devices(refresh: Bool) async -> [Device]
     /// 截图并把 PNG 写到 url；失败抛出 ShotFailure
     func screenshot(_ device: Device, to url: URL) async throws
+    /// 列出手机相册里最新的 limit 张图片（新的在前）；失败抛出 ShotFailure
+    func listPhotos(_ device: Device, limit: Int) async throws -> PhotoListing
+    /// 把图片拷到电脑上：jobs 里每项是（手机上的图片，电脑上的目标文件）。
+    /// 每完成一张调用 onProgress(已处理张数)；返回单张失败的原因（键为 PhotoItem.id），整体失败则抛出 ShotFailure
+    func exportPhotos(
+        _ device: Device,
+        jobs: [(item: PhotoItem, destination: URL)],
+        onProgress: @MainActor (Int) -> Void
+    ) async throws -> [String: String]
 }

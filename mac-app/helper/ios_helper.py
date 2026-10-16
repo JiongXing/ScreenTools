@@ -6,6 +6,10 @@
     ← {"id": 1, "ok": true, "devices": [{"udid": ..., "name": ..., "devMode": true, ...}]}
     → {"id": 2, "cmd": "screenshot", "udid": "0000...", "out": "/tmp/x.png"}
     ← {"id": 2, "ok": true, "device": {...}, "ms": 420}
+    → {"id": 3, "cmd": "photos_list", "udid": "0000...", "limit": 500}
+    ← {"id": 3, "ok": true, "photos": [{"path": "/DCIM/100APPLE/IMG_0001.HEIC", "size": 1234, "mtime": 1.7e9}], "total": 1}
+    → {"id": 4, "cmd": "photos_pull", "udid": "0000...", "items": [{"path": "/DCIM/...", "out": "/tmp/a.heic"}]}
+    ← {"id": 4, "ok": true, "results": [{"path": "/DCIM/...", "ok": true}]}
 失败时返回 {"id": .., "ok": false, "code": "DEV_MODE_OFF", "message": "..."}。
 不传 udid 时自动选择（数据线优先）。
 
@@ -58,6 +62,7 @@ from pymobiledevice3.exceptions import (  # noqa: E402
 )
 from pymobiledevice3.lockdown import create_using_usbmux  # noqa: E402
 from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel  # noqa: E402
+from pymobiledevice3.services.afc import AfcService  # noqa: E402
 from pymobiledevice3.services.amfi import AmfiService  # noqa: E402
 from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider  # noqa: E402
 from pymobiledevice3.services.dvt.instruments.screenshot import Screenshot  # noqa: E402
@@ -69,17 +74,21 @@ SHOT_TIMEOUT = 20
 MOUNT_TIMEOUT = 180
 PAIR_TIMEOUT = 30
 LIST_DEVICE_TIMEOUT = 10
+PHOTO_LIST_TIMEOUT = 90
+PHOTO_PULL_TIMEOUT = 240
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".tif", ".tiff", ".dng", ".webp"}
+PHOTO_ROOT = "/DCIM"
 
 MESSAGES = {
     "NO_DEVICE": "没检测到 iPhone：请用数据线连接，或确认手机与电脑在同一 Wi‑Fi 且之前用数据线信任过此电脑",
     "DEVICE_GONE": "所选的 iPhone 已断开，请重新连接或在菜单中换一台设备",
     "NOT_PAIRED": "iPhone 尚未信任此电脑：请插线、解锁手机，在弹窗中点「信任」",
-    "LOCKED": "请先解锁 iPhone 再截图",
+    "LOCKED": "请先解锁 iPhone 后重试",
     "DEV_MODE_OFF": "iPhone 未开启开发者模式：设置 → 隐私与安全性 → 开发者模式，打开后按提示重启并确认",
     "MOUNT_FAILED": "挂载开发者镜像失败（手机重启后首次截图需要联网下载），请检查网络后重试",
     "UNSUPPORTED": "暂不支持该 iOS 版本（iOS 17.0–17.3），请升级到 iOS 17.4 或以上",
     "TIMEOUT": "连接超时：请解锁手机；如果弹出「要信任此电脑吗」请点「信任」",
-    "UNKNOWN": "截图失败",
+    "UNKNOWN": "与 iPhone 通信失败，请重试",
 }
 
 # 连接断开类错误：关掉隧道重建一次即可恢复
@@ -313,6 +322,77 @@ class Session:
         logger.info("screenshot %d bytes in %d ms", len(data), ms)
         return {"device": {**info, "connection": "USB" if dev.is_usb else "Wi-Fi"}, "ms": ms}
 
+    # ---------- 相册（AFC 只能访问 /DCIM 下的相机胶卷） ----------
+
+    async def _open_afc(self, udid: Optional[str]):
+        dev = await self.pick_device(udid)
+        lockdown = await create_using_usbmux(
+            serial=dev.serial, connection_type=dev.connection_type, pair_timeout=PAIR_TIMEOUT
+        )
+        return lockdown, AfcService(lockdown)
+
+    async def photos_list(self, udid: Optional[str], limit: int) -> dict[str, Any]:
+        lockdown, afc = await self._open_afc(udid)
+        try:
+            async with afc:
+                try:
+                    folders = sorted(await afc.listdir(PHOTO_ROOT), reverse=True)
+                except Exception as e:
+                    # 手机里还没有任何照片时，/DCIM 可能不存在
+                    if type(e).__name__ == "AfcFileNotFoundError":
+                        return {"photos": [], "total": 0}
+                    raise
+                # 文件名里的序号随拍摄时间递增，按名字倒序即「新的在前」；只对最新的 limit 张取大小和时间
+                names: list[str] = []
+                for folder in folders:
+                    path = f"{PHOTO_ROOT}/{folder}"
+                    try:
+                        if not await afc.isdir(path):
+                            continue
+                        entries = await afc.listdir(path)
+                    except Exception as e:
+                        logger.info("skip %s: %r", path, e)
+                        continue
+                    names += [
+                        f"{path}/{n}"
+                        for n in sorted(entries, reverse=True)
+                        if not n.startswith(".") and os.path.splitext(n)[1].lower() in PHOTO_EXTENSIONS
+                    ]
+                photos = []
+                for path in names[:limit]:
+                    try:
+                        st = await afc.stat(path)
+                    except Exception as e:
+                        logger.info("stat %s failed: %r", path, e)
+                        continue
+                    photos.append({"path": path, "size": st["st_size"], "mtime": st["st_mtime"].timestamp()})
+                return {"photos": photos, "total": len(names)}
+        finally:
+            await lockdown.close()
+
+    async def photos_pull(self, udid: Optional[str], items: "list[dict[str, str]]") -> dict[str, Any]:
+        lockdown, afc = await self._open_afc(udid)
+        results = []
+        try:
+            async with afc:
+                for item in items:
+                    path = item["path"]
+                    if not path.startswith(PHOTO_ROOT + "/") or ".." in path.split("/"):
+                        results.append({"path": path, "ok": False, "error": "路径不在相机胶卷内"})
+                        continue
+                    try:
+                        await afc.pull(path, item["out"], progress_bar=False)
+                        results.append({"path": path, "ok": True})
+                    except (ConnectionError, OSError, EOFError, ConnectionTerminatedError):
+                        raise  # 连接断了，整批失败，交给上层统一报错
+                    except Exception as e:
+                        logger.warning("pull %s failed: %r", path, e)
+                        results.append({"path": path, "ok": False, "error": f"{type(e).__name__}: {e}"})
+        finally:
+            await lockdown.close()
+        self.last_used = time.monotonic()
+        return {"results": results}
+
     async def _take(self, provider) -> bytes:
         async with DvtProvider(provider) as dvt, Screenshot(dvt) as shot:
             data = await shot.get_screenshot()
@@ -346,6 +426,14 @@ async def handle(session: Session, req: dict[str, Any]) -> dict[str, Any]:
                 result = await session.list(bool(req.get("refresh")))
             elif cmd == "screenshot":
                 result = await session.screenshot(req["out"], req.get("udid"))
+            elif cmd == "photos_list":
+                result = await asyncio.wait_for(
+                    session.photos_list(req.get("udid"), int(req.get("limit", 500))), PHOTO_LIST_TIMEOUT
+                )
+            elif cmd == "photos_pull":
+                result = await asyncio.wait_for(
+                    session.photos_pull(req.get("udid"), req["items"]), PHOTO_PULL_TIMEOUT
+                )
             elif cmd == "ping":
                 result = {}
             else:
@@ -355,6 +443,8 @@ async def handle(session: Session, req: dict[str, Any]) -> dict[str, Any]:
             if isinstance(e, (KeyboardInterrupt, SystemExit, asyncio.CancelledError)):
                 raise
             err = classify(e)
+            if isinstance(e, asyncio.TimeoutError):
+                err = ShotError("TIMEOUT")
             if err.code == "UNKNOWN":
                 logger.error("%s failed", cmd, exc_info=e)
                 # 状态未知，丢弃隧道，下次重新建立
