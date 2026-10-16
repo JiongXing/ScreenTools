@@ -10,16 +10,11 @@ struct DimmerView: View {
                 Text(dimmer.isDimmed ? "屏幕已压暗" : "屏幕正常显示").font(.ui(16, .semibold))
                 Text("当前连接 \(dimmer.screenCount) 块屏幕").font(.ui(12)).foregroundStyle(.secondary)
             }
-            HStack(spacing: S(8)) {
-                Button { dimmer.toggle() } label: {
-                    Label(dimmer.isDimmed ? "恢复所有屏幕" : "压暗所有屏幕",
-                          systemImage: dimmer.isDimmed ? "sun.max" : "moon")
-                }
-                .buttonStyle(UIButtonStyle(prominent: !dimmer.isDimmed))
-                Button { dimmer.restore() } label: { Label("始终恢复", systemImage: "arrow.uturn.backward") }
-                    .buttonStyle(UIButtonStyle())
-                    .disabled(!dimmer.isDimmed)
+            Button { dimmer.toggle() } label: {
+                Label(dimmer.isDimmed ? "恢复所有屏幕" : "压暗所有屏幕",
+                      systemImage: dimmer.isDimmed ? "sun.max" : "moon")
             }
+            .buttonStyle(UIButtonStyle(prominent: !dimmer.isDimmed))
             VStack(alignment: .leading, spacing: S(8)) {
                 Text("压暗程度").font(.ui(12)).foregroundStyle(.secondary)
                 HStack(spacing: S(8)) {
