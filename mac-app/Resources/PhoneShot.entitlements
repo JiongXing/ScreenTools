@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- 仅 Developer ID + Hardened Runtime 时使用：内置 Python 需要加载自己签名的扩展模块 -->
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict>
+</plist>
