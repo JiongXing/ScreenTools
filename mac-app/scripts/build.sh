@@ -19,7 +19,7 @@ NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 step() { echo "▶ $*"; }
 
 step "1/7 准备目录"
-rm -rf "$APP" "$DMG" "$BUILD/iPhoneShot.app" "$BUILD/iPhoneShot.dmg"
+rm -rf "$APP" "$DMG"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/helper" "$APP/Contents/Helpers"
 
 step "2/7 内置 Python ${PY_VERSION}（python-build-standalone，可重定位）"

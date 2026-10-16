@@ -1,14 +1,15 @@
 # PhoneShot
 
-一个 macOS 菜单栏小工具。按一下快捷键，就能把连在这台 Mac 上的手机当前画面截下来，支持 **iPhone / iPad 和 Android**。截好的图会保存到「下载」文件夹、复制到剪贴板，并用「预览」打开。
+一个 macOS 小工具：把连在这台 Mac 上的手机当前画面截下来，支持 **iPhone / iPad 和 Android**。截好的图会保存到「下载」文件夹（可改）、复制到剪贴板；可选用「预览」打开。
 
-| 快捷键 | 效果 |
-|---|---|
-| ⌘⇧X | 截图，保存为压缩版 JPEG（质量 80%） |
-| ⌥⌘⇧X | 截图，保存为 PNG 原图 |
+它是一个普通的 Dock 应用，没有菜单栏图标：
+- 打开后显示主窗口：左边是设备列表，右边是最近一张截图的预览和「截图（JPEG）」「截图（PNG）」「复制」「显示」「打开」按钮，下面是最近 8 张截图的历史。
+- **⌘W 关闭窗口但不退出进程**，点 Dock 图标可以重新打开窗口；⌘Q 退出；⌘, 打开设置。
+- 快捷键**默认不设置**，需要时在「设置」里为 JPEG / PNG 截图各设一个。快捷键**只在 PhoneShot 处于前台时有效**，不是全局快捷键。
+- 在后台时，可以用下面的 `phoneshot://` 链接从快捷指令、Raycast 等工具触发截图。
 
 - 不需要管理员密码，不安装任何后台服务，不需要安装 Xcode 或 Android Studio
-- 同时连着好几台手机时，可以在菜单里选择截哪一台（默认「自动选择」：优先能截图的，其次优先数据线连接的）
+- 同时连着好几台手机时，在主窗口左侧选择截哪一台（默认「自动选择」：优先能截图的，其次优先数据线连接的）
 - 系统要求：macOS 13 或以上，Apple 芯片（M 系列）Mac
 
 ---
@@ -20,18 +21,18 @@
    1. 先双击打开一次，在弹窗里点「完成」（不要点「移到废纸篓」）。
    2. 打开「系统设置 → 隐私与安全性」，滚到最下面，在「已阻止 PhoneShot」旁边点「仍要打开」，然后输入密码确认。
    3. 以后再打开就不会提示了。
-3. 打开后，菜单栏右上角会出现一个取景框图标。点开菜单，就能看到当前连着的手机。
-4. 想开机自动运行，就在菜单里勾选「开机自动启动」。
+3. 打开后会显示主窗口，左侧就是当前连着的手机。
+4. 想开机自动运行，在「设置」里打开「开机自动启动」。
 
-> 如果你装过旧版脚本（`install_iphone_shot.sh`），请先运行 `bash scripts/uninstall_legacy.sh` 卸载，并删除「快捷指令」里的两个截图快捷指令，否则 ⌘⇧X 会冲突。
 
 ## 手机端准备（每台手机只需做一次）
 
 ### iPhone / iPad（需要 iOS 17.4 或以上；iOS 16 及以下也可以用）
 1. **信任这台电脑**：用数据线连接 Mac，解锁手机，在弹窗里点「信任」并输入锁屏密码。
 2. **打开开发者模式**：「设置 → 隐私与安全性 → 开发者模式」，打开开关，手机会重启；重启后按提示点「打开」并输入密码。
-   - 设置里找不到这个选项？用数据线连接 Mac，点开 PhoneShot 的菜单栏图标，这个选项就会出现。
+   - 设置里找不到这个选项？用数据线连接 Mac，打开 PhoneShot 的主窗口，这个选项就会出现。
 3. 信任过以后，手机和电脑在同一个 Wi‑Fi 下时，不插线也能截图。
+4. 刷新设备列表（打开窗口或切回 App 时会自动刷新）只读取信息，不会主动弹出「信任此电脑」；点截图时才会发起配对。
 
 ### Android
 1. **打开开发者选项**：「设置 → 关于手机」，连续点「版本号」（小米叫「MIUI 版本」/「OS 版本」）7 次。
@@ -51,13 +52,31 @@
 | 「PhoneShot 想发送通知」 | 截图失败时用通知告诉你原因 | 建议允许 |
 | 「PhoneShot 想查找本地网络上的设备」 | 通过 Wi‑Fi 连接手机时 | 点「允许」 |
 
-## 菜单说明
+## 界面说明
 
-- **截图设备**：
-  - 选「自动选择」，或者固定某一台手机。
+### 主窗口
+- **设备**（左栏）：
+  - 点一台手机就固定截那一台，或选底部的「自动选择」。
   - 设备下方的灰色小字是机型、系统版本和连接方式；如果是橙色，说明这台手机现在截不了，橙色文字就是原因和解决方法。
-- **截图后用预览打开**：关掉以后只保存文件、复制到剪贴板，不弹预览窗口。
-- **刷新设备列表**：刚插上手机时可以点一下。
+  - 「刷新设备列表」：刚插上手机时可以点一下。打开窗口、从别的 App 切回来时也会自动刷新。
+- **预览与操作**（右侧）：「截图（JPEG）」是压缩版（质量默认 80%），「截图（PNG）」是原图。截完后「复制」重新放进剪贴板，「显示」在 Finder 中定位文件，「打开」用默认看图程序打开。
+- **最近**：最近 8 张 PhoneShot 截的图，点缩略图可在左侧预览。历史记在 App 的偏好设置里，重开 App 仍在，已被删除的文件会自动忽略。它记录的是 PhoneShot 自己截过的图，不会扫描「下载」文件夹。
+- **底部状态栏**：显示保存位置；「截图后用预览打开」默认**不勾选**；右下角齿轮打开设置。
+
+### 设置（⌘,）
+- **快捷键**：默认都未设置。点按钮后按下组合键（需含 ⌘、⌃ 或 ⌥），Esc 取消，点 ✕ 清除。只在 PhoneShot 处于前台时有效。
+- **保存位置**：默认「下载」，可改成任意文件夹。
+- **JPEG 质量**：30%–100%，默认 80%。
+- **开机自动启动**。
+- **允许外部工具通过 `phoneshot://` 触发截图**：默认开启，不需要时可关闭。
+
+### 键盘
+| 按键 | 作用 |
+|---|---|
+| ⌘W | 关闭当前窗口，进程继续运行（点 Dock 图标重新打开） |
+| ⌘Q | 退出 PhoneShot |
+| ⌘, | 打开设置 |
+| 自定义 | 在设置里设置的截图快捷键（仅前台有效） |
 
 ## 常见问题
 
@@ -70,20 +89,21 @@
 | Android 显示「未授权」 | 解锁手机，在「允许 USB 调试吗？」弹窗中点「允许」；没有弹窗就重新插拔数据线 |
 | Android 显示「设备离线」 | 重新插拔数据线，或者在开发者选项里把 USB 调试关掉再打开 |
 | 截图是全黑的 | 当前页面禁止截屏，或者手机已经息屏 |
-| 「某某设备」未连接 | 你固定选择的那台手机不在线：重新连接，或在菜单里改回「自动选择」 |
+| 「某某设备」未连接 | 你固定选择的那台手机不在线：重新连接，或在主窗口左侧改回「自动选择」 |
 
 日志文件在 `~/Library/Logs/PhoneShot/` 下：`app.log` 是 App 的日志，`ios-helper.log` 是 iPhone 连接相关的日志。反馈问题时请附上这两个文件。
 
 ## 给其它工具调用
 
-打开下面的链接就能触发截图，可以接到「快捷指令」、Raycast、Alfred 等工具里：
+PhoneShot 在运行时（包括窗口被关掉、只剩 Dock 图标的状态），打开下面的链接就能触发截图，可以接到「快捷指令」、Raycast、Alfred 等工具里：
 
 ```
 phoneshot://capture              截 JPEG
 phoneshot://capture?format=png   截 PNG 原图
+phoneshot://show                 显示主窗口
 ```
 
-例如在终端里：`open "phoneshot://capture?format=png"`
+例如在终端里：`open "phoneshot://capture?format=png"`。如果不希望被其它程序触发，在「设置」里关掉「允许外部工具通过 phoneshot:// 触发截图」。
 
 ---
 
@@ -91,21 +111,25 @@ phoneshot://capture?format=png   截 PNG 原图
 
 ```
 mac-app/
-  Package.swift                 SwiftPM 工程（菜单栏 App，target：PhoneShot）
+  Package.swift                 SwiftPM 工程（Dock 应用，target：PhoneShot，另有 PhoneShotTests）
   Sources/PhoneShot/
-    AppDelegate.swift           菜单栏图标、菜单（含设备选择）、快捷键和 URL Scheme
+    App.swift / AppDelegate.swift  入口；窗口、⌘W/⌘Q/⌘,、应用内快捷键、URL Scheme
+    MainView.swift              主窗口（设备列表、预览、操作、历史、状态栏）
+    SettingsView.swift          设置窗口（快捷键录入、保存位置、JPEG 质量等）
+    Scaled.swift                界面放大倍数 UIScale 与放大版按钮、复选框、滑块
+    Settings.swift              偏好设置（UserDefaults）与 HotKeySpec
     Device.swift                设备模型 + DeviceProvider 协议
     DeviceManager.swift         汇总各平台设备、记住所选设备、自动选择规则
     IOSProvider.swift           iOS：通过 Python 辅助进程
     AndroidProvider.swift       Android：调用 adb
-    HelperClient.swift          管理 Python 辅助进程（JSON-lines 通信）
+    HelperClient.swift          管理 Python 辅助进程（JSON-lines 通信，超时会重启它）
     ProcessRunner.swift         异步运行命令行程序（带超时）
-    ShotController.swift        截图流程：选设备 → 截图 → 保存 → 剪贴板 → 预览
+    ShotController.swift        截图流程：选设备 → 截图 → 保存 → 剪贴板 → 历史（编码在后台线程）
     ImageOutput.swift           JPEG/PNG 编码、文件命名、剪贴板、黑屏检测
-    HotKeyCenter.swift          Carbon 全局快捷键（不需要「辅助功能」权限）
     Notifier.swift / AppLog.swift  通知与日志
+  Tests/PhoneShotTests/         单元测试（adb 输出解析、设备模型、快捷键编码等）
   helper/ios_helper.py          iOS 辅助进程（pymobiledevice3 用户态隧道 + DVT 截图）
-  Resources/                    Info.plist、AppIcon.icns、签名用 entitlements
+  Resources/                    Info.plist（普通 Dock 应用，非 LSUIElement）、AppIcon.icns、签名用 entitlements
   scripts/build.sh              构建 .app 和 .dmg
   scripts/make_icon.sh/.swift   重新生成图标
 ```
@@ -151,6 +175,16 @@ SIGN_ID="Developer ID Application: XXX (TEAMID)" NOTARY_PROFILE=my-profile mac-a
 `NOTARY_PROFILE` 需要先用 `xcrun notarytool store-credentials` 保存。
 
 关于内置 adb 的许可：adb 源码属于 AOSP，采用 Apache 2.0 许可，platform-tools 附带的许可声明会复制到 `Contents/Resources/adb-NOTICE.txt`。如果不想把 adb 打包进 App，用 `SKIP_ADB=1 mac-app/scripts/build.sh` 构建，App 就只会使用用户自己安装的 adb。
+
+### 测试
+
+```bash
+cd mac-app && swift test
+```
+
+### 界面放大
+
+界面尺寸、字号、图标都以「基础 pt × `UIScale.factor`」逐个放大（当前 1.5），不是整体位图缩放，所以不会模糊。想调整倍数，改 `Sources/PhoneShot/Scaled.swift` 里的 `UIScale.factor`；新增界面元素时请用 `S(...)` 和 `.font(.ui(...))`。
 
 ### 调试
 

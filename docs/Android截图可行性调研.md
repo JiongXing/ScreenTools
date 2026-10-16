@@ -1,5 +1,7 @@
 # Mac 连接 Android 手机一键截图：可行性调研
 
+> **调研文档（结论已落地）**：本文是 Android 支持的可行性调研。App 内置 adb、USB 优先，通过 `adb exec-out screencap -p` 截图（见 `AndroidProvider.swift`）。文中的「菜单栏」「快捷键」是调研时的方案，现状见 `mac-app/README.md`。无线调试等进阶选项尚未实现。
+
 > 调研日期：2026-10-11 ｜ 本机：macOS 27.0（Apple Silicon，arm64）、Xcode 27
 > 读者提示：先看「一、结论」即可；后面是细节和依据。标「未验证」的地方是没找到官方说法或没有真机实测。
 
