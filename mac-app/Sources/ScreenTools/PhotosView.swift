@@ -2,8 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 「手机相册」页：左侧设备沿用主窗口的设备列表，这里显示手机里的图片，
-/// 可以把选中的图片导出到电脑，也可以把电脑上的图片（选择或拖入）传进手机。
+/// 「手机相册」页：显示、导入、导出及预览手机上的图片和视频。
 struct PhotosView: View {
     @ObservedObject var manager: DeviceManager
     @ObservedObject var transfer: PhotoTransfer
@@ -29,7 +28,7 @@ struct PhotosView: View {
                 RoundedRectangle(cornerRadius: S(12))
                     .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8]))
                     .background(Color.accentColor.opacity(0.08))
-                    .overlay(Text("松开鼠标，把图片传到手机").font(.ui(15, .semibold)).foregroundStyle(Color.accentColor))
+                    .overlay(Text("松开鼠标，把图片和视频传到手机").font(.ui(15, .semibold)).foregroundStyle(Color.accentColor))
                     .padding(S(8))
                     .allowsHitTesting(false)
             }
@@ -60,34 +59,49 @@ struct PhotosView: View {
         guard let device = transfer.listedDevice else { return "读取中或未连接设备" }
         var text = device.name
         if transfer.total > transfer.items.count {
-            text += " · 共 \(transfer.total) 张，显示最新 \(transfer.items.count) 张"
+            text += " · 共 \(transfer.total) 项，显示最新 \(transfer.items.count) 项"
         } else {
-            text += " · 共 \(transfer.total) 张"
+            text += " · 共 \(transfer.total) 项"
         }
         return text
     }
 
     private var actions: some View {
-        HStack(spacing: S(8)) {
-            Button { pickFiles() } label: { Label("导入图片到手机…", systemImage: "square.and.arrow.down") }
-                .buttonStyle(UIButtonStyle(prominent: true))
-                .disabled(transfer.isBusy)
-            Button { transfer.exportSelected() } label: {
-                Label(transfer.selection.isEmpty ? "导出所选" : "导出所选（\(transfer.selection.count)）",
-                      systemImage: "square.and.arrow.up")
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: S(8)) { primaryActions; secondaryActions }
+                .fixedSize(horizontal: true, vertical: false)
+            VStack(alignment: .leading, spacing: S(8)) {
+                HStack(spacing: S(8)) { primaryActions }
+                HStack(spacing: S(8)) { secondaryActions }
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var primaryActions: some View {
+        Button { pickFiles() } label: { Label("导入到手机…", systemImage: "square.and.arrow.down") }
+            .buttonStyle(UIButtonStyle(prominent: true))
+            .disabled(transfer.isBusy)
+        Button { transfer.exportSelected() } label: {
+            Label(transfer.selection.isEmpty ? "导出所选" : "导出所选（\(transfer.selection.count)）",
+                  systemImage: "square.and.arrow.up")
+        }
+        .buttonStyle(UIButtonStyle())
+        .disabled(transfer.isBusy || transfer.selection.isEmpty)
+    }
+
+    @ViewBuilder
+    private var secondaryActions: some View {
+        Button { transfer.previewSelected() } label: { Label("预览", systemImage: "eye") }
             .buttonStyle(UIButtonStyle())
             .disabled(transfer.isBusy || transfer.selection.isEmpty)
-            Button { transfer.selectAll() } label: { Label("全选", systemImage: "checkmark.circle") }
+        Button { transfer.reload() } label: { Label("刷新", systemImage: "arrow.clockwise") }
+            .buttonStyle(UIButtonStyle())
+            .disabled(transfer.isBusy)
+        if transfer.isBusy, transfer.activity != .listing {
+            Button { transfer.cancel() } label: { Label("取消", systemImage: "xmark") }
                 .buttonStyle(UIButtonStyle())
-                .disabled(transfer.isBusy || transfer.items.isEmpty)
-            Button { transfer.reload() } label: { Label("刷新", systemImage: "arrow.clockwise") }
-                .buttonStyle(UIButtonStyle())
-                .disabled(transfer.isBusy)
-            if transfer.isBusy, transfer.activity != .listing {
-                Button { transfer.cancel() } label: { Label("取消", systemImage: "xmark") }
-                    .buttonStyle(UIButtonStyle())
-            }
         }
     }
 
@@ -122,6 +136,7 @@ struct PhotosView: View {
         case .listing: return "正在读取相册…"
         case let .exporting(done, total): return "正在导出 \(done)/\(total)…"
         case let .importing(done, total): return "正在传到手机 \(done)/\(total)…"
+        case let .previewing(done, total): return "正在准备预览 \(done)/\(total)…（视频较大时请稍候）"
         }
     }
 
@@ -131,15 +146,15 @@ struct PhotosView: View {
                 VStack(spacing: S(6)) {
                     Spacer()
                     Image(systemName: "photo.on.rectangle").font(.ui(28)).foregroundStyle(.secondary)
-                    Text(transfer.isBusy ? "" : "手机里没有读到图片").font(.ui(13)).foregroundStyle(.secondary)
-                    Text("把电脑上的图片拖到这里，就能传进手机").font(.ui(12)).foregroundStyle(.secondary)
+                    Text(transfer.isBusy ? "" : "手机里没有读到图片和视频").font(.ui(13)).foregroundStyle(.secondary)
+                    Text("把电脑上的图片和视频拖到这里，就能传进手机").font(.ui(12)).foregroundStyle(.secondary)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
             } else {
                 List(transfer.items, selection: $transfer.selection) { item in
                     HStack {
-                        Image(systemName: "photo").font(.ui(13)).foregroundStyle(.secondary)
+                        Image(systemName: item.isVideo ? "film" : "photo").font(.ui(13)).foregroundStyle(.secondary)
                         Text(item.name).font(.ui(13))
                         Spacer()
                         Text(Self.sizeText(item.size)).font(.ui(12)).foregroundStyle(.secondary)
@@ -160,12 +175,12 @@ struct PhotosView: View {
 
     private func pickFiles() {
         let panel = NSOpenPanel()
-        panel.title = "选择要传到手机的图片"
+        panel.title = "选择要传到手机的图片和视频"
         panel.prompt = "传到手机"
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = [.image, .movie] + PhotoNaming.videoExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
         guard panel.runModal() == .OK else { return }
         transfer.importFiles(panel.urls)
     }

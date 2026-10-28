@@ -41,6 +41,7 @@ logger = logging.getLogger("screentools.ios")
 
 from pymobiledevice3 import usbmux  # noqa: E402
 from pymobiledevice3.exceptions import (  # noqa: E402
+    AfcException,
     AlreadyMountedError,
     ChannelClosedError,
     ConnectionFailedToUsbmuxdError,
@@ -62,6 +63,9 @@ from pymobiledevice3.exceptions import (  # noqa: E402
 )
 from pymobiledevice3.lockdown import create_using_usbmux  # noqa: E402
 from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel  # noqa: E402
+from pymobiledevice3.remote.core_device.pasteboard_service import (  # noqa: E402
+    PasteboardService, POLICY_PROMISE_SECONDARY,
+)
 from pymobiledevice3.services.afc import AfcService  # noqa: E402
 from pymobiledevice3.services.amfi import AmfiService  # noqa: E402
 from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider  # noqa: E402
@@ -76,7 +80,12 @@ PAIR_TIMEOUT = 30
 LIST_DEVICE_TIMEOUT = 10
 PHOTO_LIST_TIMEOUT = 90
 PHOTO_PULL_TIMEOUT = 240
-PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".tif", ".tiff", ".dng", ".webp"}
+VIDEO_PULL_TIMEOUT = 900
+CLIPBOARD_TIMEOUT = 10
+MAX_CLIPBOARD_BYTES = 1024 * 1024
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".tif", ".tiff", ".dng", ".webp", ".bmp"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".3gp", ".3g2", ".avi", ".mkv", ".webm"}
+MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
 PHOTO_ROOT = "/DCIM"
 
 MESSAGES = {
@@ -89,6 +98,11 @@ MESSAGES = {
     "UNSUPPORTED": "暂不支持该 iOS 版本（iOS 17.0–17.3），请升级到 iOS 17.4 或以上",
     "TIMEOUT": "连接超时：请解锁手机；如果弹出「要信任此电脑吗」请点「信任」",
     "UNKNOWN": "与 iPhone 通信失败，请重试",
+    "CLIPBOARD_UNSUPPORTED": "这台 iPhone 当前未提供剪贴板服务，请确认系统版本、开发者模式及开发者镜像是否受支持",
+    "CLIPBOARD_TIMEOUT": "iPhone 剪贴板操作超时，请解锁手机后重试；写入超时时请先在手机上检查内容",
+    "CLIPBOARD_NO_DATA": "iPhone 剪贴板服务返回了文本类型，但没有提供文本数据；当前系统/开发者镜像无法读取此内容，已保留原内容",
+    "CLIPBOARD_VERIFY_FAILED": "iPhone 写入后未返回相同文本，无法确认写入成功，请在手机上检查剪贴板",
+    "CLIPBOARD_TOO_LARGE": "文本过长，iPhone 剪贴板单次最多支持 1 MiB UTF-8 文本",
 }
 
 # 连接断开类错误：关掉隧道重建一次即可恢复
@@ -146,6 +160,34 @@ def version_tuple(v: str) -> tuple:
         except ValueError:
             break
     return tuple(parts)
+
+
+def clipboard_text(snapshot: dict[str, Any]) -> Optional[str]:
+    """保留空字符串；不解析富文本或解析尚未提供的数据表示。"""
+    board = snapshot.get("pasteboard", {})
+    for item in board.get("items", []):
+        data = item.get("data", {})
+        for uti in ("public.utf8-plain-text", "public.plain-text", "public.text", "public.url"):
+            raw = data.get(uti, {}).get("data")
+            if isinstance(raw, str):
+                return raw
+            if isinstance(raw, bytes):
+                try:
+                    return raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+    return None
+
+
+def checked_clipboard_text(snapshot: dict[str, Any]) -> Optional[str]:
+    if "error" in snapshot:
+        raise ShotError("CLIPBOARD_UNSUPPORTED")
+    text = clipboard_text(snapshot)
+    text_types = {"public.utf8-plain-text", "public.plain-text", "public.text", "public.url"}
+    if text is None and any(text_types.intersection(item.get("types", []))
+                            for item in snapshot.get("pasteboard", {}).get("items", [])):
+        raise ShotError("CLIPBOARD_NO_DATA")
+    return text
 
 
 class Session:
@@ -322,6 +364,59 @@ class Session:
         logger.info("screenshot %d bytes in %d ms", len(data), ms)
         return {"device": {**info, "connection": "USB" if dev.is_usb else "Wi-Fi"}, "ms": ms}
 
+    # ---------- 剪贴板（只读取主要表示，不触发富文本全量解析） ----------
+
+    async def clipboard(self, udid: Optional[str], text: Optional[str] = None) -> dict[str, Any]:
+        if text is not None and len(text.encode("utf-8")) > MAX_CLIPBOARD_BYTES:
+            raise ShotError("CLIPBOARD_TOO_LARGE")
+        dev = await self.pick_device(udid)
+        info = await self.device_info(dev, refresh_dev_mode=True)
+        if version_tuple(info["version"]) < (17, 4):
+            raise ShotError("CLIPBOARD_UNSUPPORTED")
+        if not info["devMode"]:
+            raise ShotError("DEV_MODE_OFF")
+        service = None
+        try:
+            # 仅服务连接失败时尝试挂载。SET 发出后绝不自动重试，避免重复写入。
+            for attempt in range(2):
+                provider = await self.ensure_tunnel(dev.serial)
+                try:
+                    service = PasteboardService(provider)
+                    await asyncio.wait_for(service.connect(), CLIPBOARD_TIMEOUT)
+                    break
+                except (*SERVICE_ERRORS, KeyError):
+                    if service is not None:
+                        await service.close()
+                        service = None
+                    if attempt:
+                        raise ShotError("CLIPBOARD_UNSUPPORTED")
+                    await self._mount(provider)
+                    await self.close_tunnel()
+            snapshot = await asyncio.wait_for(
+                service.get(data_policy=POLICY_PROMISE_SECONDARY), CLIPBOARD_TIMEOUT
+            )
+            # 某些系统/DDI 只返回类型却不给数据；此时不覆盖无法备份的原内容。
+            current = checked_clipboard_text(snapshot)
+            if text is None:
+                return {"text": current}
+            result = await asyncio.wait_for(service.set_text(text), CLIPBOARD_TIMEOUT)
+            if "error" in result:
+                raise ShotError("CLIPBOARD_VERIFY_FAILED")
+            actual = await asyncio.wait_for(service.get(data_policy=POLICY_PROMISE_SECONDARY), CLIPBOARD_TIMEOUT)
+            if clipboard_text(actual) != text:
+                raise ShotError("CLIPBOARD_VERIFY_FAILED")
+            return {}
+        except asyncio.TimeoutError:
+            await self.close_tunnel()
+            raise ShotError("CLIPBOARD_TIMEOUT") from None
+        except RECONNECT_ERRORS:
+            await self.close_tunnel()
+            raise ShotError("DEVICE_GONE") from None
+        finally:
+            if service is not None:
+                await service.close()
+            self.last_used = time.monotonic()
+
     # ---------- 相册（AFC 只能访问 /DCIM 下的相机胶卷） ----------
 
     async def _open_afc(self, udid: Optional[str]):
@@ -345,6 +440,8 @@ class Session:
                 # 文件名里的序号随拍摄时间递增，按名字倒序即「新的在前」；只对最新的 limit 张取大小和时间
                 names: list[str] = []
                 for folder in folders:
+                    if folder.startswith("."):
+                        continue
                     path = f"{PHOTO_ROOT}/{folder}"
                     try:
                         if not await afc.isdir(path):
@@ -356,7 +453,7 @@ class Session:
                     names += [
                         f"{path}/{n}"
                         for n in sorted(entries, reverse=True)
-                        if not n.startswith(".") and os.path.splitext(n)[1].lower() in PHOTO_EXTENSIONS
+                        if not n.startswith(".") and os.path.splitext(n)[1].lower() in MEDIA_EXTENSIONS
                     ]
                 photos = []
                 for path in names[:limit]:
@@ -383,6 +480,9 @@ class Session:
                     try:
                         await afc.pull(path, item["out"], progress_bar=False)
                         results.append({"path": path, "ok": True})
+                    except AfcException as e:
+                        # AFC 文件不存在/无权限属于单项失败；它继承 OSError，必须先处理。
+                        results.append({"path": path, "ok": False, "error": f"{type(e).__name__}: {e}"})
                     except (ConnectionError, OSError, EOFError, ConnectionTerminatedError):
                         raise  # 连接断了，整批失败，交给上层统一报错
                     except Exception as e:
@@ -426,13 +526,23 @@ async def handle(session: Session, req: dict[str, Any]) -> dict[str, Any]:
                 result = await session.list(bool(req.get("refresh")))
             elif cmd == "screenshot":
                 result = await session.screenshot(req["out"], req.get("udid"))
+            elif cmd in ("clipboard_get", "clipboard_set"):
+                if cmd == "clipboard_set" and not isinstance(req.get("text"), str):
+                    raise ShotError("UNKNOWN", "invalid clipboard text")
+                result = await session.clipboard(
+                    req.get("udid"), req["text"] if cmd == "clipboard_set" else None
+                )
             elif cmd == "photos_list":
                 result = await asyncio.wait_for(
                     session.photos_list(req.get("udid"), int(req.get("limit", 500))), PHOTO_LIST_TIMEOUT
                 )
             elif cmd == "photos_pull":
+                # Swift 端视频逐个请求；保留旧图片批次的超时。
+                timeout = VIDEO_PULL_TIMEOUT if any(
+                    os.path.splitext(item["path"])[1].lower() in VIDEO_EXTENSIONS for item in req["items"]
+                ) else PHOTO_PULL_TIMEOUT
                 result = await asyncio.wait_for(
-                    session.photos_pull(req.get("udid"), req["items"]), PHOTO_PULL_TIMEOUT
+                    session.photos_pull(req.get("udid"), req["items"]), timeout
                 )
             elif cmd == "ping":
                 result = {}
@@ -446,7 +556,12 @@ async def handle(session: Session, req: dict[str, Any]) -> dict[str, Any]:
             if isinstance(e, asyncio.TimeoutError):
                 err = ShotError("TIMEOUT")
             if err.code == "UNKNOWN":
-                logger.error("%s failed", cmd, exc_info=e)
+                if cmd in ("clipboard_get", "clipboard_set"):
+                    # 第三方异常可能携带请求数据，不把正文或堆栈写入日志/回复。
+                    err.detail = type(e).__name__
+                    logger.error("%s failed (%s)", cmd, type(e).__name__)
+                else:
+                    logger.error("%s failed", cmd, exc_info=e)
                 # 状态未知，丢弃隧道，下次重新建立
                 await session.close_tunnel()
             else:
@@ -457,7 +572,8 @@ async def handle(session: Session, req: dict[str, Any]) -> dict[str, Any]:
 async def main() -> None:
     session = Session()
     loop = asyncio.get_running_loop()
-    reader = asyncio.StreamReader()
+    # JSON 转义后的 1 MiB 文本可大于默认的 64 KiB 行上限。
+    reader = asyncio.StreamReader(limit=8 * 1024 * 1024)
     await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
     watchdog = asyncio.create_task(session.idle_watchdog())
     logger.info("helper started (pid %d)", os.getpid())

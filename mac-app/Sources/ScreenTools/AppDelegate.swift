@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let manager = DeviceManager()
     private lazy var shots = ShotController(manager: manager)
     private lazy var photos = PhotoTransfer(manager: manager)
+    private lazy var clipboard = ClipboardController(manager: manager)
     private let dimmer = ScreenDimmer()
 
     private var mainWindow: NSWindow?
@@ -30,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             dimmer.stop()
             exit(passed ? 0 : 1)
         }
+        PhotoPreviewSession.cleanupStaleSessions()
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             MainActor.assumeIsolated { self?.handleKey(event) ?? event }
         }
@@ -41,8 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        photos.cancel()
+        photos.previewController.close()
         dimmer.stop()
         manager.ios.stop()
+        manager.android.stopClipboard()
     }
 
     /// 关掉窗口后进程继续运行
@@ -98,9 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showMainWindow() {
         if mainWindow == nil {
-            let host = NSHostingController(rootView: MainView(manager: manager, shots: shots, transfer: photos, dimmer: dimmer))
+            let host = NSHostingController(rootView: MainView(manager: manager, shots: shots, transfer: photos, dimmer: dimmer, clipboard: clipboard))
             host.sizingOptions = []
-            let window = NSWindow(contentViewController: host)
+            let window = PhotoPreviewHostingWindow(contentViewController: host)
+            window.photoPreview = photos.previewController
+            window.onClose = { [weak self] in self?.photos.cancel() }
             window.title = "屏幕工具箱"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.setContentSize(NSSize(width: 720 * UIScale.factor, height: 480 * UIScale.factor))

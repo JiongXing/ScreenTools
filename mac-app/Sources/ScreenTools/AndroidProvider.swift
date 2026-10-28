@@ -13,8 +13,23 @@ final class AndroidProvider: DeviceProvider {
     private lazy var adb: URL? = Self.locateADB()
     private var serverStarted = false
     private var propsCache: [String: Props] = [:]
+    private let clipboard = AndroidClipboardBridge()
 
     var isAvailable: Bool { adb != nil }
+
+    func stopClipboard() { clipboard.stop() }
+
+    func readClipboard(_ device: Device) async throws -> String? {
+        guard let adb else { throw ShotFailure("没有找到 adb，无法连接 Android 手机") }
+        await ensureServer(adb)
+        return try await clipboard.perform(adb: adb, serial: device.serial)
+    }
+
+    func writeClipboard(_ device: Device, text: String) async throws {
+        guard let adb else { throw ShotFailure("没有找到 adb，无法连接 Android 手机") }
+        await ensureServer(adb)
+        _ = try await clipboard.perform(adb: adb, serial: device.serial, writing: text)
+    }
 
     func devices(refresh: Bool) async -> [Device] {
         guard let adb else { return [] }
@@ -68,9 +83,9 @@ final class AndroidProvider: DeviceProvider {
 
     // MARK: - 相册
 
-    /// 手机里放图片的位置：相机、截图、其它 App 保存的图片
-    private static let photoRoots = ["/sdcard/DCIM", "/sdcard/Pictures"]
-    /// 从电脑导入的图片放在这个文件夹，相册里会出现同名相簿
+    /// 相机、截图、其它 App 保存的图片和视频。
+    private static let photoRoots = ["/sdcard/DCIM", "/sdcard/Pictures", "/sdcard/Movies"]
+    /// 从电脑导入的图片和视频放在这个文件夹，相册里会出现同名相簿
     static let importFolder = "/sdcard/Pictures/ScreenTools"
 
     func listPhotos(_ device: Device, limit: Int) async throws -> PhotoListing {
@@ -99,22 +114,23 @@ final class AndroidProvider: DeviceProvider {
         for (index, job) in jobs.enumerated() {
             try Task.checkCancellation()
             let output = try await ProcessRunner.run(
-                adb, ["-s", device.serial, "pull", job.item.id, job.destination.path], timeout: 300
+                adb, ["-s", device.serial, "pull", job.item.id, job.destination.path],
+                timeout: PhotoNaming.transferTimeout(for: job.item.id)
             )
             if output.status == 0, !output.timedOut {
                 PhotoNaming.stampDate(job.item.date, on: job.destination)
             } else {
                 let message = (output.stderrText + output.stdoutText).trimmingCharacters(in: .whitespacesAndNewlines)
+                try? FileManager.default.removeItem(at: job.destination)
                 if let known = Self.problem(forError: message) { throw ShotFailure(known) }
                 failures[job.item.id] = output.timedOut ? "超时" : String(message.prefix(120))
-                try? FileManager.default.removeItem(at: job.destination)
             }
             onProgress(index + 1)
         }
         return failures
     }
 
-    /// 把电脑上的图片推到手机的 Pictures/ScreenTools，并通知系统相册刷新。返回单个文件失败的原因（键为文件名）。
+    /// 把电脑上的图片和视频推到 Pictures/ScreenTools，并通知系统相册刷新。
     func importPhotos(
         _ device: Device,
         files: [URL],
@@ -139,7 +155,10 @@ final class AndroidProvider: DeviceProvider {
         for (index, file) in files.enumerated() {
             try Task.checkCancellation()
             let remoteName = PhotoNaming.unique(PhotoNaming.safeName(file.lastPathComponent)) { taken.contains($0.lowercased()) }
-            let output = try await ProcessRunner.run(adb, serial + ["push", file.path, "\(folder)/\(remoteName)"], timeout: 300)
+            let output = try await ProcessRunner.run(
+                adb, serial + ["push", file.path, "\(folder)/\(remoteName)"],
+                timeout: PhotoNaming.transferTimeout(for: file.path)
+            )
             if output.status == 0, !output.timedOut {
                 taken.insert(remoteName.lowercased())
                 pushed.append(remoteName)
@@ -228,12 +247,12 @@ final class AndroidProvider: DeviceProvider {
         }
     }
 
-    /// 解析 `stat -c '%Y %s %n'` 的输出（修改时间 大小 路径），只保留图片，忽略隐藏文件和缩略图缓存，新的在前。
+    /// 解析 `stat -c '%Y %s %n'` 的输出，只保留图片和视频，忽略隐藏文件和缩略图缓存，新的在前。
     static func parsePhotoList(_ text: String) -> [PhotoItem] {
         text.components(separatedBy: "\n").compactMap { raw -> PhotoItem? in
             let parts = raw.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ", maxSplits: 2).map(String.init)
             guard parts.count == 3, let mtime = TimeInterval(parts[0]), let size = Int64(parts[1]),
-                  parts[2].hasPrefix("/"), PhotoNaming.isImage(parts[2]),
+                  parts[2].hasPrefix("/"), PhotoNaming.isMedia(parts[2]),
                   !parts[2].split(separator: "/").contains(where: { $0.hasPrefix(".") })
             else { return nil }
             return PhotoItem(id: parts[2], size: size, date: Date(timeIntervalSince1970: mtime))

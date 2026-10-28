@@ -8,6 +8,24 @@ final class IOSProvider: DeviceProvider {
     func start() { helper.start() }
     func stop() { helper.stop() }
 
+    func readClipboard(_ device: Device) async throws -> String? {
+        let reply = await helper.send("clipboard_get", ["udid": device.serial], timeout: 240)
+        guard reply["ok"] as? Bool == true else {
+            throw ShotFailure(reply["message"] as? String ?? "读取 iPhone 剪贴板失败")
+        }
+        return reply["text"] as? String
+    }
+
+    func writeClipboard(_ device: Device, text: String) async throws {
+        guard text.utf8.count <= 1024 * 1024 else {
+            throw ShotFailure("文本过长，iPhone 剪贴板单次最多支持 1 MiB UTF-8 文本")
+        }
+        let reply = await helper.send("clipboard_set", ["udid": device.serial, "text": text], timeout: 240)
+        guard reply["ok"] as? Bool == true else {
+            throw ShotFailure(reply["message"] as? String ?? "写入 iPhone 剪贴板失败")
+        }
+    }
+
     func devices(refresh: Bool) async -> [Device] {
         let reply = await helper.send("list", ["refresh": refresh], timeout: refresh ? 60 : 30)
         guard reply["ok"] as? Bool == true, let list = reply["devices"] as? [[String: Any]] else {
@@ -68,11 +86,11 @@ final class IOSProvider: DeviceProvider {
     ) async throws -> [String: String] {
         var failures: [String: String] = [:]
         var done = 0
-        // 每次让辅助进程拷一小批，避免每张图都重新建立连接，又能及时更新进度
-        for batch in jobs.chunked(into: 8) {
+        // 图片最多八项一批；视频单独请求，超时不会累积到同批其它视频上。
+        for batch in Self.transferBatches(jobs) {
             try Task.checkCancellation()
             let items = batch.map { ["path": $0.item.id, "out": $0.destination.path] }
-            let reply = await helper.send("photos_pull", ["udid": device.serial, "items": items], timeout: 270)
+            let reply = await helper.send("photos_pull", ["udid": device.serial, "items": items], timeout: Self.pullTimeout(for: batch))
             guard reply["ok"] as? Bool == true else {
                 batch.forEach { try? FileManager.default.removeItem(at: $0.destination) }
                 throw ShotFailure(reply["message"] as? String ?? "导出失败")
@@ -91,5 +109,27 @@ final class IOSProvider: DeviceProvider {
             onProgress(done)
         }
         return failures
+    }
+
+    static func transferBatches(
+        _ jobs: [(item: PhotoItem, destination: URL)]
+    ) -> [[(item: PhotoItem, destination: URL)]] {
+        var result: [[(item: PhotoItem, destination: URL)]] = []
+        var images: [(item: PhotoItem, destination: URL)] = []
+        for job in jobs {
+            if job.item.isVideo {
+                if !images.isEmpty { result.append(images); images = [] }
+                result.append([job])
+            } else {
+                images.append(job)
+                if images.count == 8 { result.append(images); images = [] }
+            }
+        }
+        if !images.isEmpty { result.append(images) }
+        return result
+    }
+
+    static func pullTimeout(for jobs: [(item: PhotoItem, destination: URL)]) -> TimeInterval {
+        (jobs.contains { $0.item.isVideo } ? 900 : 240) + 30
     }
 }

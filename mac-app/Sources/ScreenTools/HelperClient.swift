@@ -11,6 +11,13 @@ final class HelperClient {
     private var nextID = 1
     private var pending: [Int: CheckedContinuation<Reply, Never>] = [:]
     private var timers: [Int: DispatchWorkItem] = [:]
+    private struct Request {
+        let id: Int
+        let line: Data
+        let timeout: TimeInterval
+    }
+    private var queue: [Request] = []
+    private var activeID: Int?
     private var stopping = false
     private var recentCrashes: [Date] = []
 
@@ -85,7 +92,7 @@ final class HelperClient {
 
     func send(_ cmd: String, _ params: [String: Any] = [:], timeout: TimeInterval) async -> Reply {
         if process == nil { start() }
-        guard let stdinHandle else {
+        guard stdinHandle != nil else {
             return Self.failure("HELPER_DOWN", "截图组件启动失败")
         }
         let id = nextID
@@ -100,17 +107,8 @@ final class HelperClient {
 
         return await withCheckedContinuation { continuation in
             pending[id] = continuation
-            do {
-                try stdinHandle.write(contentsOf: line)
-            } catch {
-                resolve(id, Self.failure("HELPER_DOWN", "截图组件已退出，请重试"))
-                return
-            }
-            let timer = DispatchWorkItem { [weak self] in
-                MainActor.assumeIsolated { self?.handleTimeout(id) }
-            }
-            timers[id] = timer
-            DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: timer)
+            queue.append(Request(id: id, line: line, timeout: timeout))
+            dispatchNext()
         }
     }
 
@@ -119,6 +117,26 @@ final class HelperClient {
     private func resolve(_ id: Int, _ reply: Reply) {
         timers.removeValue(forKey: id)?.cancel()
         pending.removeValue(forKey: id)?.resume(returning: reply)
+        if activeID == id { activeID = nil }
+    }
+
+    /// 辅助进程本身串行处理请求；排队期间不计时，避免设备刷新超时杀掉正在传输的大视频。
+    private func dispatchNext() {
+        guard activeID == nil, !queue.isEmpty, let stdinHandle, !stopping else { return }
+        let request = queue.removeFirst()
+        activeID = request.id
+        do {
+            try stdinHandle.write(contentsOf: request.line)
+        } catch {
+            resolve(request.id, Self.failure("HELPER_DOWN", "截图组件已退出，请重试"))
+            dispatchNext()
+            return
+        }
+        let timer = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.handleTimeout(request.id) }
+        }
+        timers[request.id] = timer
+        DispatchQueue.main.asyncAfter(deadline: .now() + request.timeout, execute: timer)
     }
 
     /// 请求超时：辅助进程仍在处理它（并占着内部锁），后续请求都会排在后面，所以直接重启辅助进程。
@@ -126,6 +144,8 @@ final class HelperClient {
         guard pending[id] != nil else { return }
         resolve(id, Self.failure("TIMEOUT", "操作超时，请确认手机已解锁并保持连接"))
         AppLog.write("request \(id) timed out, restarting helper")
+        try? stdinHandle?.close()
+        stdinHandle = nil // 等退出回调处理排队请求，不再向即将重启的进程发送请求
         process?.terminate() // terminationHandler → handleExit 会自动重启
     }
 
@@ -139,12 +159,15 @@ final class HelperClient {
                   let id = obj["id"] as? Int else { continue }
             resolve(id, obj)
         }
+        dispatchNext()
     }
 
     private func handleExit(status: Int32) {
         process = nil
         stdinHandle = nil
         buffer.removeAll()
+        queue.removeAll()
+        activeID = nil
         for id in Array(pending.keys) {
             resolve(id, Self.failure("HELPER_DOWN", "截图组件意外退出，请重试"))
         }

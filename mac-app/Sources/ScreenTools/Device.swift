@@ -50,7 +50,7 @@ struct ShotFailure: LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// 手机相册里的一张图片
+/// 手机相册里的一项图片或视频
 struct PhotoItem: Identifiable, Hashable {
     /// 手机上的完整路径（iOS 为 /DCIM/…，Android 为 /sdcard/…），同时作为唯一标识
     let id: String
@@ -58,9 +58,10 @@ struct PhotoItem: Identifiable, Hashable {
     let date: Date
 
     var name: String { (id as NSString).lastPathComponent }
+    var isVideo: Bool { PhotoNaming.isVideo(id) }
 }
 
-/// 相册列表：items 是最新的若干张，total 是手机上图片的总数
+/// 相册列表：items 是最新的若干项，total 是手机上图片和视频的总数
 struct PhotoListing {
     var items: [PhotoItem]
     var total: Int
@@ -68,14 +69,17 @@ struct PhotoListing {
 
 @MainActor
 protocol DeviceProvider: AnyObject {
+    /// nil 表示没有可读取的文本；空字符串是有效的文本内容。
+    func readClipboard(_ device: Device) async throws -> String?
+    func writeClipboard(_ device: Device, text: String) async throws
     /// refresh 为 true 时（打开菜单）重新读取设备状态；false 时（截图前）尽量走缓存、求快
     func devices(refresh: Bool) async -> [Device]
     /// 截图并把 PNG 写到 url；失败抛出 ShotFailure
     func screenshot(_ device: Device, to url: URL) async throws
-    /// 列出手机相册里最新的 limit 张图片（新的在前）；失败抛出 ShotFailure
+    /// 列出手机相册里最新的 limit 项图片和视频（新的在前）；失败抛出 ShotFailure
     func listPhotos(_ device: Device, limit: Int) async throws -> PhotoListing
-    /// 把图片拷到电脑上：jobs 里每项是（手机上的图片，电脑上的目标文件）。
-    /// 每完成一张调用 onProgress(已处理张数)；返回单张失败的原因（键为 PhotoItem.id），整体失败则抛出 ShotFailure
+    /// 把媒体拷到电脑上：jobs 里每项是（手机上的媒体，电脑上的目标文件）。
+    /// 每完成一项调用 onProgress(已处理项数)；返回单项失败的原因（键为 PhotoItem.id），整体失败则抛出 ShotFailure
     func exportPhotos(
         _ device: Device,
         jobs: [(item: PhotoItem, destination: URL)],

@@ -69,10 +69,12 @@ if [ -n "$ADB" ]; then
   if [ -f "$(dirname "$ADB")/NOTICE.txt" ]; then
     cp "$(dirname "$ADB")/NOTICE.txt" "$APP/Contents/Resources/adb-NOTICE.txt"
   fi
-  echo "  使用 $ADB（$("$ADB" version | sed -n 2p)）"
+  echo "  使用 ${ADB}（$("$ADB" version | sed -n 2p)）"
 else
   echo "  ! 没找到 adb，App 将只使用用户电脑上已安装的 adb"
 fi
+
+bash "$ROOT/scripts/prepare_clipboard.sh" "$APP/Contents/Resources"
 
 step "5/7 编译 Swift"
 (cd "$ROOT" && swift build -c release --arch arm64)

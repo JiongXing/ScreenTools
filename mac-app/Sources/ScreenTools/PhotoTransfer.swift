@@ -1,13 +1,21 @@
 import AppKit
-import UniformTypeIdentifiers
 
 /// 相册传输用到的文件名处理。
 enum PhotoNaming {
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "gif", "tif", "tiff", "dng", "webp", "bmp"]
+    static let videoExtensions: Set<String> = ["mp4", "mov", "m4v", "3gp", "3g2", "avi", "mkv", "webm"]
 
     static func isImage(_ path: String) -> Bool {
         imageExtensions.contains((path as NSString).pathExtension.lowercased())
     }
+
+    static func isVideo(_ path: String) -> Bool {
+        videoExtensions.contains((path as NSString).pathExtension.lowercased())
+    }
+
+    static func isMedia(_ path: String) -> Bool { isImage(path) || isVideo(path) }
+
+    static func transferTimeout(for path: String) -> TimeInterval { isVideo(path) ? 900 : 300 }
 
     /// 传到手机上的文件名：只保留字母、数字和 ._-，其它字符（空格、引号等）换成下划线
     static func safeName(_ name: String) -> String {
@@ -37,8 +45,8 @@ enum PhotoNaming {
         try? FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
     }
 
-    /// 展开用户选择或拖入的文件和文件夹，得到其中所有图片文件（文件夹会递归）。
-    static func collectImages(from urls: [URL]) -> [URL] {
+    /// 展开用户选择或拖入的文件和文件夹，得到图片和视频（文件夹会递归）。
+    static func collectMedia(from urls: [URL]) -> [URL] {
         var result: [URL] = []
         let fm = FileManager.default
         for url in urls {
@@ -47,39 +55,47 @@ enum PhotoNaming {
             if isDir.boolValue {
                 guard let files = fm.enumerator(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
                 else { continue }
-                for case let file as URL in files where isImage(file.path) {
+                for case let file as URL in files where isMedia(file.path) {
+                    guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
                     result.append(file)
                 }
-            } else if isImage(url.path) {
+            } else if !url.lastPathComponent.hasPrefix("."), isMedia(url.path) {
                 result.append(url)
             }
         }
         return result
     }
-}
 
-extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        stride(from: 0, to: count, by: size).map { Array(self[$0..<Swift.min($0 + size, count)]) }
+    /// 导出和预览共用命名规则，处理不同相簿中的同名文件。
+    static func exportJobs(_ items: [PhotoItem], to directory: URL) -> [(item: PhotoItem, destination: URL)] {
+        var used = Set<String>()
+        return items.map { item in
+            let name = unique(item.name) {
+                used.contains($0.lowercased()) || FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
+            }
+            used.insert(name.lowercased())
+            return (item, directory.appendingPathComponent(name))
+        }
     }
 }
 
-/// 手机相册 ↔ 电脑：读取相册列表、把选中的图片导出到电脑、把电脑上的图片传进手机。
+/// 手机相册 ↔ 电脑：读取、导入、导出及预览图片和视频。
 @MainActor
 final class PhotoTransfer: ObservableObject {
     enum Activity: Equatable {
         case listing
         case exporting(done: Int, total: Int)
         case importing(done: Int, total: Int)
+        case previewing(done: Int, total: Int)
     }
 
-    /// 一次最多列出的张数（手机上更早的图片不显示）
+    /// 一次最多列出的项数（手机上更早的媒体不显示）
     static let listLimit = 500
 
     private let manager: DeviceManager
     @Published private(set) var items: [PhotoItem] = []
     @Published private(set) var total = 0
-    /// 当前列表对应的设备；导出时用它，保证选中的图片和设备一致
+    /// 当前列表对应的设备；导出和预览均使用它，保证媒体和设备一致
     @Published private(set) var listedDevice: Device?
     @Published var selection: Set<PhotoItem.ID> = []
     @Published private(set) var activity: Activity?
@@ -91,6 +107,7 @@ final class PhotoTransfer: ObservableObject {
 
     private var task: Task<Void, Never>?
     private var airDrop: NSSharingService?
+    let previewController = PhotoPreviewController()
 
     init(manager: DeviceManager) {
         self.manager = manager
@@ -119,8 +136,6 @@ final class PhotoTransfer: ObservableObject {
         selection = []
     }
 
-    func selectAll() { selection = Set(items.map(\.id)) }
-
     // MARK: - 导出（手机 → 电脑）
 
     func exportSelected() {
@@ -130,23 +145,36 @@ final class PhotoTransfer: ObservableObject {
         run(.exporting(done: 0, total: chosen.count)) { [self] in
             let dir = Self.exportDirectory
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            var used = Set<String>()
-            let jobs = chosen.map { item -> (item: PhotoItem, destination: URL) in
-                let name = PhotoNaming.unique(item.name) {
-                    used.contains($0.lowercased()) || FileManager.default.fileExists(atPath: dir.appendingPathComponent($0).path)
-                }
-                used.insert(name.lowercased())
-                return (item, dir.appendingPathComponent(name))
-            }
+            let jobs = PhotoNaming.exportJobs(chosen, to: dir)
             let failures = try await manager.provider(for: device).exportPhotos(device, jobs: jobs) { done in
                 self.activity = .exporting(done: done, total: chosen.count)
             }
             exportedFolder = dir
             let ok = chosen.count - failures.count
             message = failures.isEmpty
-                ? "已导出 \(ok) 张到「\(dir.deletingLastPathComponent().lastPathComponent)/手机相册」"
-                : "已导出 \(ok) 张，\(failures.count) 张失败（\(failures.values.first ?? "")）"
+                ? "已导出 \(ok) 项到「\(dir.deletingLastPathComponent().lastPathComponent)/手机相册」"
+                : "已导出 \(ok) 项，\(failures.count) 项失败（\(failures.values.first ?? "")）"
             AppLog.write("exported \(ok)/\(chosen.count) photos from \(device.key) to \(dir.path)")
+        }
+    }
+
+    // MARK: - 预览（临时下载，不写入导出目录）
+
+    func previewSelected() {
+        guard !isBusy, let device = listedDevice else { return }
+        let chosen = items.filter { selection.contains($0.id) }
+        guard !chosen.isEmpty else { return }
+        previewController.close()
+        run(.previewing(done: 0, total: chosen.count)) { [self] in
+            let session = try await PhotoPreviewSession.prepare(
+                chosen, device: device, provider: manager.provider(for: device)
+            ) { done in
+                self.activity = .previewing(done: done, total: chosen.count)
+            }
+            try previewController.present(session)
+            message = session.failureCount == 0
+                ? "已打开 \(session.urls.count) 项预览"
+                : "已打开 \(session.urls.count) 项预览，\(session.failureCount) 项下载失败"
         }
     }
 
@@ -154,9 +182,9 @@ final class PhotoTransfer: ObservableObject {
 
     func importFiles(_ urls: [URL]) {
         guard !isBusy else { return }
-        let files = PhotoNaming.collectImages(from: urls)
+        let files = PhotoNaming.collectMedia(from: urls)
         guard !files.isEmpty else {
-            error = "没有可导入的图片（支持 JPG、PNG、HEIC、GIF、WebP 等）"
+            error = "没有可导入的图片和视频（支持 JPG、HEIC、PNG、MP4、MOV 等）"
             message = nil
             return
         }
@@ -171,15 +199,15 @@ final class PhotoTransfer: ObservableObject {
             }
             let ok = files.count - failures.count
             message = failures.isEmpty
-                ? "已传到手机的「Pictures/ScreenTools」，相册里可能要等几秒才会出现（共 \(ok) 张）"
-                : "已传 \(ok) 张，\(failures.count) 张失败（\(failures.keys.first ?? "")：\(failures.values.first ?? "")）"
+                ? "已传到手机的「Pictures/ScreenTools」，相册里可能要等几秒才会出现（共 \(ok) 项）"
+                : "已传 \(ok) 项，\(failures.count) 项失败（\(failures.keys.first ?? "")：\(failures.values.first ?? "")）"
             AppLog.write("imported \(ok)/\(files.count) photos to \(device.key)")
             activity = .listing
             try? await loadList()
         }
     }
 
-    /// iPhone 无法从电脑直接写入「照片」，用隔空投送：手机上点「接受」后图片会存进「照片」。
+    /// iPhone 无法从电脑直接写入「照片」，通过隔空投送交给系统接收媒体。
     private func sendViaAirDrop(_ files: [URL]) throws {
         guard let service = NSSharingService(named: .sendViaAirDrop), service.canPerform(withItems: files) else {
             throw ShotFailure("无法使用隔空投送：请确认这台 Mac 的蓝牙和 Wi‑Fi 已打开")
@@ -187,7 +215,7 @@ final class PhotoTransfer: ObservableObject {
         airDrop = service
         NSApp.activate(ignoringOtherApps: true)
         service.perform(withItems: files)
-        message = "已打开隔空投送：在弹出的窗口里选择这台 iPhone，并在手机上点「接受」，图片会存入「照片」"
+        message = "已打开隔空投送：请选择这台 iPhone 并在手机上接受。系统支持的图片和视频会存入「照片」"
     }
 
     func cancel() { task?.cancel() }
