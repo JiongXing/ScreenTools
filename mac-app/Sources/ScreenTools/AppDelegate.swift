@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(passed ? 0 : 1)
         }
         PhotoPreviewSession.cleanupStaleSessions()
+        NSApp.mainMenu = makeMainMenu()
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             MainActor.assumeIsolated { self?.handleKey(event) ?? event }
         }
@@ -82,6 +83,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let spec = Settings.pngHotKey, spec.matches(event) { shots.take(.png); return nil }
         return event
     }
+
+    // MARK: - 菜单
+
+    /// 手动启动的 App 没有默认主菜单；文本框的 ⌘A/⌘C/⌘V/⌘X/⌘Z 靠「编辑」菜单的快捷键分发到第一响应者。
+    /// ⌘W/⌘Q/⌘, 由 handleKey 先处理，这里的同名项只用于显示。
+    private func makeMainMenu() -> NSMenu {
+        let main = NSMenu()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "隐藏 屏幕工具箱", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "退出 屏幕工具箱", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        main.addItem(withTitle: "", action: nil, keyEquivalent: "").submenu = appMenu
+
+        let edit = NSMenu(title: "编辑")
+        edit.addItem(withTitle: "撤销", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "重做", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        main.addItem(withTitle: "编辑", action: nil, keyEquivalent: "").submenu = edit
+
+        let window = NSMenu(title: "窗口")
+        window.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        window.addItem(withTitle: "关闭", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        main.addItem(withTitle: "窗口", action: nil, keyEquivalent: "").submenu = window
+        NSApp.windowsMenu = window
+        return main
+    }
+
+    @objc private func openSettings() { showSettings() }
 
     // MARK: - 窗口
 
