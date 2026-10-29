@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import plistlib
 import sys
 import time
 from logging.handlers import RotatingFileHandler
@@ -83,6 +84,9 @@ PHOTO_PULL_TIMEOUT = 240
 VIDEO_PULL_TIMEOUT = 900
 CLIPBOARD_TIMEOUT = 10
 MAX_CLIPBOARD_BYTES = 1024 * 1024
+TEXT_UTIS = ("public.utf8-plain-text", "public.plain-text", "public.text", "public.url")
+# 备忘录复制的首类型：NSKeyedArchiver 归档的 ICNotePasteboardData，纯文本在其 protobuf 里。
+NOTES_UTI = "com.apple.notes.richtext"
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".tif", ".tiff", ".dng", ".webp", ".bmp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".3gp", ".3g2", ".avi", ".mkv", ".webm"}
 MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
@@ -100,7 +104,7 @@ MESSAGES = {
     "UNKNOWN": "与 iPhone 通信失败，请重试",
     "CLIPBOARD_UNSUPPORTED": "这台 iPhone 当前未提供剪贴板服务，请确认系统版本、开发者模式及开发者镜像是否受支持",
     "CLIPBOARD_TIMEOUT": "iPhone 剪贴板操作超时，请解锁手机后重试；写入超时时请先在手机上检查内容",
-    "CLIPBOARD_NO_DATA": "iPhone 剪贴板服务返回了文本类型，但没有提供文本数据；当前系统/开发者镜像无法读取此内容，已保留原内容",
+    "CLIPBOARD_NO_DATA": "无法直接读取这种格式（如网页复制的内容）。请在手机上把它粘贴到备忘录等文本编辑器，再从那里复制后重试；编辑内容已保留",
     "CLIPBOARD_VERIFY_FAILED": "iPhone 写入后未返回相同文本，无法确认写入成功，请在手机上检查剪贴板",
     "CLIPBOARD_TOO_LARGE": "文本过长，iPhone 剪贴板单次最多支持 1 MiB UTF-8 文本",
 }
@@ -162,12 +166,15 @@ def version_tuple(v: str) -> tuple:
     return tuple(parts)
 
 
+def clipboard_items(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    return snapshot.get("pasteboard", {}).get("items", [])
+
+
 def clipboard_text(snapshot: dict[str, Any]) -> Optional[str]:
-    """保留空字符串；不解析富文本或解析尚未提供的数据表示。"""
-    board = snapshot.get("pasteboard", {})
-    for item in board.get("items", []):
+    """保留空字符串；只看已内联的数据，被承诺（未内联）的表示返回 {}。"""
+    for item in clipboard_items(snapshot):
         data = item.get("data", {})
-        for uti in ("public.utf8-plain-text", "public.plain-text", "public.text", "public.url"):
+        for uti in TEXT_UTIS:
             raw = data.get(uti, {}).get("data")
             if isinstance(raw, str):
                 return raw
@@ -179,15 +186,64 @@ def clipboard_text(snapshot: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def checked_clipboard_text(snapshot: dict[str, Any]) -> Optional[str]:
-    if "error" in snapshot:
-        raise ShotError("CLIPBOARD_UNSUPPORTED")
-    text = clipboard_text(snapshot)
-    text_types = {"public.utf8-plain-text", "public.plain-text", "public.text", "public.url"}
-    if text is None and any(text_types.intersection(item.get("types", []))
-                            for item in snapshot.get("pasteboard", {}).get("items", [])):
-        raise ShotError("CLIPBOARD_NO_DATA")
-    return text
+def protobuf_string(data: bytes, field: int) -> Optional[str]:
+    """顶层第一个 field 号的 length-delimited 字段，按 UTF-8 解码。"""
+    def varint(i: int) -> tuple[int, int]:
+        value = shift = 0
+        while True:
+            byte = data[i]
+            i += 1
+            value |= (byte & 0x7F) << shift
+            shift += 7
+            if byte < 0x80:
+                return value, i
+
+    i = 0
+    while i < len(data):
+        key, i = varint(i)
+        number, wire = key >> 3, key & 7
+        if wire == 0:
+            _, i = varint(i)
+        elif wire == 1:
+            i += 8
+        elif wire == 5:
+            i += 4
+        elif wire == 2:
+            length, i = varint(i)
+            if number == field:
+                return data[i:i + length].decode("utf-8")
+            i += length
+        else:
+            return None
+    return None
+
+
+def notes_text(snapshot: dict[str, Any]) -> Optional[str]:
+    """备忘录首类型里的纯文本；格式不符时返回 None，交给全量拉取。
+
+    让手机转换出纯文本要等它生成 RTF 失败（约 64 秒），而首类型本身 0 秒就能拿到。
+    attributedStringData 是备忘录的 topotext String 消息，字段 2 是正文，附件为 U+FFFC。
+    """
+    for item in clipboard_items(snapshot):
+        raw = item.get("data", {}).get(NOTES_UTI, {}).get("data")
+        if not isinstance(raw, bytes):
+            continue
+        try:
+            archive = plistlib.loads(raw)
+            objects = archive["$objects"]
+            root = objects[archive["$top"]["root"].data]
+            data = objects[root["attributedStringData"].data]["NS.data"]
+            text = protobuf_string(data, 2)
+        except Exception as e:
+            logger.info("notes pasteboard data not parsed (%s)", type(e).__name__)
+            continue
+        if text is not None:
+            return text.replace("\ufffc", "")
+    return None
+
+
+def promises_text(snapshot: dict[str, Any]) -> bool:
+    return any(set(TEXT_UTIS).intersection(item.get("types", [])) for item in clipboard_items(snapshot))
 
 
 class Session:
@@ -364,7 +420,10 @@ class Session:
         logger.info("screenshot %d bytes in %d ms", len(data), ms)
         return {"device": {**info, "connection": "USB" if dev.is_usb else "Wi-Fi"}, "ms": ms}
 
-    # ---------- 剪贴板（只读取主要表示，不触发富文本全量解析） ----------
+    # ---------- 剪贴板 ----------
+    # 只用 promiseSecondary：只内联每项的首类型，手机端立即返回。纯文本在次要表示里的内容
+    # （如 Safari 网页复制）要手机生成 RTF 失败后（约 64 秒）才给出，allResolved、devicectl 都一样慢，
+    # RESOLVE 不回复，所以不读取，提示用户经文本编辑器中转。
 
     async def clipboard(self, udid: Optional[str], text: Optional[str] = None) -> dict[str, Any]:
         if text is not None and len(text.encode("utf-8")) > MAX_CLIPBOARD_BYTES:
@@ -392,13 +451,9 @@ class Session:
                         raise ShotError("CLIPBOARD_UNSUPPORTED")
                     await self._mount(provider)
                     await self.close_tunnel()
-            snapshot = await asyncio.wait_for(
-                service.get(data_policy=POLICY_PROMISE_SECONDARY), CLIPBOARD_TIMEOUT
-            )
-            # 某些系统/DDI 只返回类型却不给数据；此时不覆盖无法备份的原内容。
-            current = checked_clipboard_text(snapshot)
             if text is None:
-                return {"text": current}
+                return await self._clipboard_read(service)
+            # 用户明确要求替换，写入前不读取现有内容（读取富文本可能阻塞很久）；写后读回核对。
             result = await asyncio.wait_for(service.set_text(text), CLIPBOARD_TIMEOUT)
             if "error" in result:
                 raise ShotError("CLIPBOARD_VERIFY_FAILED")
@@ -416,6 +471,20 @@ class Session:
             if service is not None:
                 await service.close()
             self.last_used = time.monotonic()
+
+    async def _clipboard_read(self, service: PasteboardService) -> dict[str, Any]:
+        snapshot = await asyncio.wait_for(service.get(data_policy=POLICY_PROMISE_SECONDARY), CLIPBOARD_TIMEOUT)
+        if "error" in snapshot:
+            raise ShotError("CLIPBOARD_UNSUPPORTED")
+        text = clipboard_text(snapshot)
+        if text is not None:
+            return {"text": text}
+        text = notes_text(snapshot)
+        if text is not None:
+            return {"text": text}
+        if promises_text(snapshot):
+            raise ShotError("CLIPBOARD_NO_DATA")
+        return {"text": None}
 
     # ---------- 相册（AFC 只能访问 /DCIM 下的相机胶卷） ----------
 

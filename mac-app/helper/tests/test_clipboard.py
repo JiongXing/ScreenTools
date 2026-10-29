@@ -2,6 +2,7 @@
 import ast
 import asyncio
 import logging
+import plistlib
 import time
 import types
 import unittest
@@ -22,15 +23,23 @@ def load_code():
     tree = ast.parse((Path(__file__).parents[1] / "ios_helper.py").read_text())
     selected = [ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)]
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name in ("clipboard_text", "checked_clipboard_text", "version_tuple"):
+        if isinstance(node, ast.FunctionDef) and node.name in (
+                "clipboard_items", "clipboard_text", "promises_text", "version_tuple",
+                "protobuf_string", "notes_text"):
+            selected.append(node)
+        elif isinstance(node, ast.Assign) and any(
+                getattr(target, "id", None) in ("TEXT_UTIS", "NOTES_UTI") for target in node.targets):
             selected.append(node)
         elif isinstance(node, ast.ClassDef) and node.name == "Session":
-            node.body = [method for method in node.body if isinstance(method, ast.AsyncFunctionDef) and method.name == "clipboard"]
+            node.body = [method for method in node.body if isinstance(method, ast.AsyncFunctionDef)
+                         and method.name in ("clipboard", "_clipboard_read")]
             selected.append(node)
         elif isinstance(node, ast.AsyncFunctionDef) and node.name == "handle":
             selected.append(node)
-    ns = dict(asyncio=asyncio, time=time, ShotError=ShotError, CLIPBOARD_TIMEOUT=0.05, MAX_CLIPBOARD_BYTES=1024 * 1024,
-              POLICY_PROMISE_SECONDARY={"promiseSecondary": {}}, SERVICE_ERRORS=(ServiceError,),
+    ns = dict(asyncio=asyncio, plistlib=plistlib, time=time, ShotError=ShotError, CLIPBOARD_TIMEOUT=0.05,
+              MAX_CLIPBOARD_BYTES=1024 * 1024,
+              POLICY_PROMISE_SECONDARY={"promiseSecondary": {}},
+              SERVICE_ERRORS=(ServiceError,),
               RECONNECT_ERRORS=(ConnectionError, OSError, asyncio.TimeoutError, EOFError),
               logger=logging.getLogger(__name__))
     exec(compile(ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[])), "clipboard", "exec"), ns)
@@ -39,6 +48,33 @@ def load_code():
 
 def snapshot(text, uti="public.utf8-plain-text"):
     return {"pasteboard": {"items": [{"data": {uti: {"data": text.encode("utf-8")}}}]}}
+
+
+def promised_text(primary, data=b"primary"):
+    """手机上复制富文本时 promiseSecondary 的形态：首类型内联，纯文本被承诺（{}）。"""
+    types = [primary, "public.utf8-plain-text", "public.rtf"]
+    return {"pasteboard": {"items": [{"types": types, "data": {primary: {"data": data},
+                                                                "public.utf8-plain-text": {}, "public.rtf": {}}}]}}
+
+
+def notes_archive(text):
+    """备忘录首类型的形态：ICNotePasteboardData 归档，attributedStringData 是 protobuf（字段 2 为正文）。"""
+    body = text.encode("utf-8")
+    proto = bytes([0x08, 0x00, 0x12]) + varint(len(body)) + body + bytes([0x2A, 0x02, 0x08, 0x01])
+    return plistlib.dumps({
+        "$version": 100000, "$archiver": "NSKeyedArchiver", "$top": {"root": plistlib.UID(1)},
+        "$objects": ["$null", {"attributedStringData": plistlib.UID(2), "$class": plistlib.UID(3)},
+                     {"NS.data": proto}, {"$classname": "ICNotePasteboardData"}],
+    }, fmt=plistlib.FMT_BINARY)
+
+
+def varint(n):
+    out = bytearray()
+    while True:
+        out.append((n & 0x7F) | (0x80 if n > 0x7F else 0))
+        n >>= 7
+        if not n:
+            return bytes(out)
 
 
 class ClipboardTests(unittest.IsolatedAsyncioTestCase):
@@ -69,10 +105,12 @@ class ClipboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await session.clipboard("TEST"), {"text": "中文 🧪"})
         service.get.assert_awaited_once_with(data_policy={"promiseSecondary": {}})
         service.close.assert_awaited_once()
-        service.get.side_effect = [snapshot("中文 🧪"), snapshot("")]
+        service.get.reset_mock()
+        service.get.side_effect = [snapshot("")]
         service.set_text.return_value = {}
-        await session.clipboard("TEST", "")
+        self.assertEqual(await session.clipboard("TEST", ""), {})
         service.set_text.assert_awaited_once_with("")
+        service.get.assert_awaited_once_with(data_policy={"promiseSecondary": {}})
 
     async def test_missing_service_mounts_once_without_sending_write(self):
         code, ns = load_code()
@@ -105,17 +143,44 @@ class ClipboardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(service.connect.await_count, 2)
             service.set_text.assert_awaited_once_with("test")
 
-    async def test_unavailable_text_data_prevents_write(self):
+    async def test_write_replaces_unreadable_content_without_reading_first(self):
         code, ns = load_code()
         service = AsyncMock()
-        service.get.return_value = {"pasteboard": {"items": [{"types": ["public.utf8-plain-text"],
-                                                             "data": {"public.utf8-plain-text": {}}}]}}
+        service.set_text.return_value = {}
+        service.get.return_value = snapshot("new text")
+        ns["PasteboardService"] = Mock(return_value=service)
+        session = self.session(code)
+        self.assertEqual(await session.clipboard("TEST", "new text"), {})
+        service.set_text.assert_awaited_once_with("new text")
+        # 只有写后核对的一次读取，且不全量拉取。
+        service.get.assert_awaited_once_with(data_policy={"promiseSecondary": {}})
+
+    async def test_notes_primary_is_parsed_without_full_pull(self):
+        code, ns = load_code()
+        text = "备忘录 🧪\n" * 30 + "\ufffc附件后"
+        service = AsyncMock()
+        service.get.return_value = promised_text("com.apple.notes.richtext", notes_archive(text))
+        ns["PasteboardService"] = Mock(return_value=service)
+        session = self.session(code)
+        self.assertEqual(await session.clipboard("TEST"), {"text": text.replace("\ufffc", "")})
+        service.get.assert_awaited_once_with(data_policy={"promiseSecondary": {}})
+        self.assertIsNone(code.notes_text(promised_text("com.apple.notes.richtext", b"not a plist")))
+
+    async def test_promised_text_is_reported_without_slow_full_pull(self):
+        code, ns = load_code()
+        service = AsyncMock()
+        # Safari 网页复制：首类型只是个标记，纯文本被承诺。
+        service.get.return_value = promised_text("iOS rich content paste pasteboard type", b"iOS rich content paste pasteboard type")
         ns["PasteboardService"] = Mock(return_value=service)
         session = self.session(code)
         with self.assertRaises(ShotError) as error:
-            await session.clipboard("TEST", "new text")
+            await session.clipboard("TEST")
         self.assertEqual(error.exception.code, "CLIPBOARD_NO_DATA")
-        service.set_text.assert_not_awaited()
+        service.get.assert_awaited_once_with(data_policy={"promiseSecondary": {}})
+        # 图片等非文本内容表示没有文本，不报错。
+        service.get.reset_mock()
+        service.get.return_value = snapshot("png", "public.png")
+        self.assertEqual(await session.clipboard("TEST"), {"text": None})
 
     async def test_write_must_be_verified_and_size_limit_precedes_device_access(self):
         code, ns = load_code()

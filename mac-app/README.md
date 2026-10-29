@@ -4,7 +4,7 @@
 
 - **手机截图**：把连在这台 Mac 上的手机当前画面截下来，支持 **iPhone / iPad 和 Android**。截好的图会保存到「下载」文件夹（可改）、复制到剪贴板；可选用「预览」打开。
 - **手机相册**：把手机相册里的图片和视频**导出到这台 Mac**，也可以把 Mac 上的图片和视频**传进手机相册**。Android 直接读写，iPhone 导出走数据线、导入走隔空投送（见下文）。
-- **剪贴板**：手动读取、编辑和写入 Mac 与手机的文本或链接。Mac 和 Android 已通过本机实测；iPhone 依赖设备提供的开发者剪贴板服务，当前 iPhone 15 / iOS 26.6.2 返回类型但不给文本，尚未通过真机读写验收（见下文）。
+- **剪贴板**：手动读取、编辑和写入 Mac 与手机的文本或链接。Mac、Android 和 iPhone 均已通过本机实测（iPhone 依赖设备提供的开发者剪贴板服务，见下文）。
 - **屏幕压暗**：用可穿透鼠标的黑色遮罩临时压暗所有活动屏幕，不修改硬件背光（由原 ScreenDimmer 合并而来）。
 
 它是一个普通的 Dock 应用，**没有菜单栏图标**，所有功能都在主窗口里：
@@ -89,8 +89,8 @@
 - **写入电脑 / 写入手机**：用编辑框当前内容替换对应剪贴板，空字符串也可写入；只写入，不会触发粘贴。
 - 没有连接手机时，电脑读写仍可使用。手机操作期间显示目标与进度并禁用重复操作，开始时固定目标设备和文本。切换 Tab 保留草稿，退出进程后清除；没有历史记录、图片或自动同步。
 - **Android**：需要 USB 调试授权；部分小米/红米机型还需开启「USB 调试（安全设置）」。内置 scrcpy 服务只建立控制通道，不传音视频、不自动亮屏、不注入复制/粘贴按键。写入收到确认后还会读回核对；每次操作结束清理连接、辅助进程和端口转发，下次重新建立。单次写入上限为 262130 字节 UTF-8。若设备不返回数据，会显示读取超时及可能原因，不把无响应判定为成功或空字符串。
-- **iPhone**：需要 iOS 17.4 以上、信任这台 Mac、开发者模式及兼容的开发者镜像，并且设备实际提供 `com.apple.coredevice.pasteboardservice`。截图可用不代表剪贴板可用。首次可能需要联网挂载镜像；单次写入上限为 1 MiB UTF-8。只读取主要文本表示，避免富文本全量解析长时间阻塞；写入前检查服务能否读取现有文本，写入后核对，不自动重试写入。
-- **当前 iPhone 限制**：iPhone 15 / iOS 26.6.2 / DDI 27A266a 实测只返回文本类型、没有文本数据，系统 `devicectl` 对照也未读出文本。界面会明确报错，并在写入前阻止覆盖。此环境目前无法完成 iPhone 双向传递，尚不能保证其它 iOS/DDI 组合可用。
+- **iPhone**：需要 iOS 17.4 以上、信任这台 Mac、开发者模式及兼容的开发者镜像，并且设备实际提供 `com.apple.coredevice.pasteboardservice`。截图可用不代表剪贴板可用。首次可能需要联网挂载镜像；单次写入上限为 1 MiB UTF-8。只支持纯文本（含 emoji 和链接），不保留格式和图片。读取只请求每项的首类型：纯文本直接使用；备忘录复制的私有格式由 helper 直接解析出正文；其它格式（如 Safari 网页复制）不读取，直接提示在手机上粘贴到备忘录等文本编辑器后再复制。写入直接替换，不先读取现有内容；写入后读回核对，不自动重试写入。
+- **iPhone 已知限制**：Safari 等网页复制的内容首类型只是个标记，纯文本要等手机生成 RTF 失败（约 64 秒）后才给出，系统 `devicectl` 同样慢，没有更快的接口，所以不支持。可在手机上粘贴到备忘录再复制，或用同一 Apple 账号的「通用剪贴板」（接力）后在 Mac 上点「读取电脑」。
 - 日志只记录剪贴板操作状态和错误，不记录正文。实测环境、备份恢复和待验收项见 [剪贴板验收记录](docs/clipboard-validation.md)。
 
 ### 设置（⌘,）
@@ -208,7 +208,7 @@ mac-app/
 - iOS：辅助进程用 pymobiledevice3 的 `AfcService`（lockdown 的 `com.apple.afc`，只能访问 `/DCIM`）列出并拷贝图片和视频，不需要开发者模式和隧道。写入「照片」库没有公开的有线接口，所以导入走隔空投送（`NSSharingService(named: .sendViaAirDrop)`）。
 - `afc` 模块导入时依赖 `xonsh`，所以 `build.sh` 不能把它从内置 Python 里删掉（构建时会验证 `import pymobiledevice3.services.afc`）。
 
-**剪贴板**：Mac 使用 `NSPasteboard.general`。iOS 使用固定版本 `pymobiledevice3==11.26.0` 的 `PasteboardService`，复用用户态隧道；helper 新增 `clipboard_get` 与 `clipboard_set`，读取返回 `text: null` 表示无文本，`text: ""` 表示空字符串。Android 使用固定的官方 scrcpy-server v5.0.1（Apache 2.0），Swift 直接实现控制通道协议，用户无需安装 scrcpy 或手机 APK。
+**剪贴板**：Mac 使用 `NSPasteboard.general`。iOS 使用固定版本 `pymobiledevice3==11.26.0` 的 `PasteboardService`，复用用户态隧道；helper 新增 `clipboard_get` 与 `clipboard_set`，读取返回 `text: null` 表示无文本，`text: ""` 表示空字符串，备忘录的 `com.apple.notes.richtext`（`ICNotePasteboardData` 归档，正文在 `attributedStringData` protobuf 的字段 2）由 helper 解析。不发送 `RESOLVE`：电脑发出后手机不回复。Android 使用固定的官方 scrcpy-server v5.0.1（Apache 2.0），Swift 直接实现控制通道协议，用户无需安装 scrcpy 或手机 APK。
 
 **iOS 辅助进程协议**（每行一个 JSON）：
 
